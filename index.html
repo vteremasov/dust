@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Infinity Canvas - WebGPU & Pure C</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0b0d11;
+            --card-bg: rgba(20, 24, 33, 0.75);
+            --card-border: rgba(255, 255, 255, 0.08);
+            --accent: #5e6ad2;
+            --accent-glow: rgba(94, 106, 210, 0.4);
+            --text-color: #e2e8f0;
+            --text-muted: #94a3b8;
+        }
+
+        * {
+            box-sizing: border-box;
+            user-select: none;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-family: 'Outfit', sans-serif;
+            overflow: hidden;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 1;
+        }
+
+        /* Glassmorphic overlay panels */
+        .glass-panel {
+            background: var(--card-bg);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid var(--card-border);
+            border-radius: 16px;
+            padding: 20px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5), 
+                        inset 0 1px 1px rgba(255, 255, 255, 0.1);
+            position: absolute;
+            z-index: 10;
+            transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .glass-panel:hover {
+            border-color: rgba(255, 255, 255, 0.15);
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.6), 
+                        0 0 15px var(--accent-glow);
+        }
+
+        #app-title {
+            top: 20px;
+            left: 20px;
+            width: 200px;
+            padding: 12px 20px;
+        }
+
+        #app-title h1 {
+            margin-bottom: 2px;
+        }
+
+        #app-title .subtitle {
+            margin-bottom: 0;
+        }
+
+        #toolbar {
+            top: 80px;
+            left: 20px;
+            width: 56px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            padding: 8px;
+            align-items: center;
+        }
+
+        #toolbar .btn {
+            width: 40px;
+            height: 40px;
+            padding: 0;
+            margin: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            border-radius: 8px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+        }
+
+        #toolbar .color-picker {
+            width: 40px;
+            height: 40px;
+            margin: 0;
+            padding: 0;
+            background: transparent;
+            border: none;
+            cursor: pointer;
+        }
+
+        #toolbar .color-picker::-webkit-color-swatch-wrapper {
+            padding: 0;
+        }
+
+        #toolbar .color-picker::-webkit-color-swatch {
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .toolbar-divider {
+            width: 24px;
+            height: 1px;
+            background: rgba(255, 255, 255, 0.15);
+            margin: 4px 0;
+        }
+
+        #info-panel {
+            bottom: 20px;
+            right: 20px;
+            padding: 12px 20px;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            border-radius: 12px;
+        }
+
+        h1 {
+            font-size: 1.4rem;
+            font-weight: 800;
+            background: linear-gradient(135deg, #fff 30%, var(--text-muted));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 6px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .subtitle {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-bottom: 20px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .control-group {
+            margin-bottom: 16px;
+        }
+
+        .control-label {
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .shortcut-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.85rem;
+            margin-bottom: 8px;
+        }
+
+        .key {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 6px;
+            padding: 2px 8px;
+            font-family: monospace;
+            font-size: 0.75rem;
+            box-shadow: 0 2px 0 rgba(0, 0, 0, 0.3);
+        }
+
+        .btn {
+            background: var(--accent);
+            border: none;
+            color: white;
+            padding: 10px 16px;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 0.85rem;
+            cursor: pointer;
+            width: 100%;
+            transition: all 0.2s ease;
+            box-shadow: 0 4px 12px var(--accent-glow);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 6px;
+            margin-top: 8px;
+        }
+
+        .btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 6px 16px rgba(94, 106, 210, 0.6);
+            background: #6c79e6;
+        }
+
+        .btn:active {
+            transform: translateY(1px);
+        }
+
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: var(--text-color);
+            box-shadow: none;
+        }
+
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.12);
+            border-color: rgba(255, 255, 255, 0.2);
+            box-shadow: none;
+        }
+
+        .btn-widget {
+            margin-top: 0 !important;
+            padding: 8px 12px;
+            font-size: 0.8rem;
+        }
+
+        /* Loading Spinner */
+        #loader {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 100;
+            text-align: center;
+            transition: opacity 0.5s ease;
+        }
+
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 3px solid rgba(94, 106, 210, 0.1);
+            border-radius: 50%;
+            border-top-color: var(--accent);
+            animation: spin 1s ease-in-out infinite;
+            margin: 0 auto 16px;
+            box-shadow: 0 0 15px var(--accent-glow);
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        #error-msg {
+            color: #ff6b6b;
+            font-size: 0.9rem;
+            margin-top: 10px;
+            max-width: 300px;
+            word-wrap: break-word;
+        }
+
+        /* Editing input box helper */
+        #text-editor {
+            position: absolute;
+            z-index: 20;
+            background: var(--bg-color);
+            border: 2px solid var(--accent);
+            color: var(--text-color);
+            font-family: inherit;
+            font-size: 14px;
+            padding: 8px;
+            border-radius: 8px;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+            display: none;
+            outline: none;
+        }
+
+        .input-field {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 6px;
+            color: var(--text-color);
+            padding: 6px 10px;
+            font-family: inherit;
+            font-size: 0.85rem;
+            outline: none;
+            transition: all 0.2s ease;
+        }
+
+        .input-field:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 8px var(--accent-glow);
+            background: rgba(255, 255, 255, 0.08);
+        }
+
+        .color-picker {
+            border: none;
+            width: 32px;
+            height: 32px;
+            border-radius: 6px;
+            cursor: pointer;
+            background: transparent;
+            padding: 0;
+        }
+
+        .color-picker::-webkit-color-swatch-wrapper {
+            padding: 0;
+        }
+
+        .color-picker::-webkit-color-swatch {
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 6px;
+        }
+    </style>
+</head>
+<body>
+    <div id="loader">
+        <div class="spinner"></div>
+        <div style="font-weight: 600; letter-spacing: 0.05em;">INITIALIZING WEBGPU ENGINE</div>
+        <div id="error-msg"></div>
+    </div>
+
+    <!-- The interactive canvas -->
+    <canvas id="canvas"></canvas>
+
+    <!-- Hidden text input helper for double click editing -->
+    <textarea id="text-editor" maxlength="250"></textarea>
+
+    <!-- Glassmorphic App Title -->
+    <div id="app-title" class="glass-panel">
+        <h1>Infinity Canvas</h1>
+    </div>
+
+    <!-- Glassmorphic Toolbar -->
+    <div id="toolbar" class="glass-panel">
+        <button class="btn btn-widget" id="btn-add-sticky" title="Add Sticky Note (Double-click board to add at cursor)">
+            <svg style="width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2;" viewBox="0 0 24 24">
+                <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h10l6-6V5c0-1.1-.9-2-2-2z" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M15 21v-6h6" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+        </button>
+        <button class="btn btn-widget" id="btn-add-rect" title="Add Rectangle Shape">
+            <svg style="width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2;" viewBox="0 0 24 24">
+                <rect x="3" y="3" width="18" height="18" rx="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+        </button>
+        <button class="btn btn-widget" id="btn-add-oval" title="Add Oval Shape">
+            <svg style="width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2;" viewBox="0 0 24 24">
+                <circle cx="12" cy="12" r="9" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+        </button>
+        <button class="btn btn-widget" id="btn-add-text" title="Add Text Label">
+            <svg style="width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2;" viewBox="0 0 24 24">
+                <path d="M4 7V4h16v3M9 20h6M12 4v16" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+        </button>
+        <button class="btn btn-secondary" id="btn-add-image" title="Upload and Place Image">
+            <svg style="width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2;" viewBox="0 0 24 24">
+                <rect x="3" y="3" width="18" height="18" rx="2" stroke-linecap="round" stroke-linejoin="round"/>
+                <circle cx="8.5" cy="8.5" r="1.5" fill="currentColor"/>
+                <path d="M21 15l-5-5L5 21" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+        </button>
+
+        <div class="toolbar-divider"></div>
+
+        <button class="btn btn-secondary" id="btn-toggle-draw" title="Toggle Draw Tool (Freehand drawing)">
+            <svg style="width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2;" viewBox="0 0 24 24">
+                <path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <span id="draw-btn-text" style="display: none;">Draw Tool: OFF</span>
+        </button>
+        <input type="color" id="draw-color-picker" class="color-picker" value="#1accde" title="Choose Drawing Color">
+        <button class="btn btn-secondary" id="btn-toggle-connection" title="Toggle Connection Tool (Shift + click shape to connect)">
+            <svg style="width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2;" viewBox="0 0 24 24">
+                <rect x="3" y="14" width="6" height="6" rx="1"/>
+                <rect x="15" y="4" width="6" height="6" rx="1"/>
+                <path d="M9 17h3a2 2 0 0 0 2-2V9a2 2 0 0 1 2-2h1"/>
+                <path d="M16 5l2 2-2 2"/>
+            </svg>
+            <span id="connection-btn-text" style="display: none;">Connection Tool: OFF</span>
+        </button>
+
+        <div class="toolbar-divider"></div>
+
+        <button class="btn btn-secondary" id="btn-clear" title="Clear all nodes and connections from the board">
+            <svg style="width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2;" viewBox="0 0 24 24">
+                <polyline points="3 6 5 6 21 6"/>
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                <line x1="10" y1="11" x2="10" y2="17"/>
+                <line x1="14" y1="11" x2="14" y2="17"/>
+            </svg>
+        </button>
+        <input type="file" id="image-loader" accept="image/*" style="display: none;" />
+    </div>
+
+    <!-- Properties Inspector Panel -->
+    <div id="properties-panel" class="glass-panel" style="display: none; top: 20px; right: 20px; width: 200px;">
+        <h2 style="font-size: 1.1rem; font-weight: 800; margin-bottom: 12px; background: linear-gradient(135deg, #fff 30%, var(--text-muted)); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">Properties</h2>
+        
+        <div class="control-group" id="size-group">
+            <div class="control-label">Size</div>
+            <div style="display: flex; gap: 8px;">
+                <div style="flex: 1;">
+                    <span style="font-size: 0.7rem; color: var(--text-muted); display: block; margin-bottom: 2px;">Width</span>
+                    <input type="number" id="prop-w" class="input-field" style="width: 100%;" min="10">
+                </div>
+                <div style="flex: 1;">
+                    <span style="font-size: 0.7rem; color: var(--text-muted); display: block; margin-bottom: 2px;">Height</span>
+                    <input type="number" id="prop-h" class="input-field" style="width: 100%;" min="10">
+                </div>
+            </div>
+        </div>
+
+        <div class="control-group" id="font-group">
+            <div class="control-label">Typography</div>
+            <div>
+                <span style="font-size: 0.7rem; color: var(--text-muted); display: block; margin-bottom: 2px;">Font Size (px)</span>
+                <input type="number" id="prop-font-size" class="input-field" style="width: 100%;" min="6" max="120">
+            </div>
+        </div>
+
+        <div class="control-group">
+            <div class="control-label" id="bg-color-label">Background</div>
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <input type="color" id="prop-bg-color" class="color-picker">
+                <label style="font-size: 0.85rem; display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                    <input type="checkbox" id="prop-bg-transparent"> Transparent
+                </label>
+            </div>
+        </div>
+
+        <div class="control-group" id="border-group">
+            <div class="control-label">Border</div>
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <input type="color" id="prop-border-color" class="color-picker">
+                <label style="font-size: 0.85rem; display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                    <input type="checkbox" id="prop-border-transparent"> None
+                </label>
+            </div>
+        </div>
+
+        <div class="control-group" style="margin-bottom: 0;">
+            <div class="control-label">Arrangement (Z-Order)</div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px;">
+                <button id="btn-z-front" class="btn btn-secondary btn-widget">To Front</button>
+                <button id="btn-z-back" class="btn btn-secondary btn-widget">To Back</button>
+                <button id="btn-z-forward" class="btn btn-secondary btn-widget">Forward</button>
+                <button id="btn-z-backward" class="btn btn-secondary btn-widget">Backward</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Display Stats -->
+    <div id="info-panel" class="glass-panel">
+        <span>Pan: </span><span id="stat-pan" style="font-weight: 600; color: var(--text-color);">X: 0, Y: 0</span>
+        <span style="margin: 0 10px;">|</span>
+        <span>Zoom: </span><span id="stat-zoom" style="font-weight: 600; color: var(--text-color);">100%</span>
+        <span style="margin: 0 10px;">|</span>
+        <span>Notes: </span><span id="stat-nodes" style="font-weight: 600; color: var(--text-color);">0</span>
+    </div>
+
+    <script type="module" src="bridge.js"></script>
+</body>
+</html>
