@@ -332,7 +332,21 @@ int main() {
         return 1;
     }
 
-    FILE *f_fallback = fopen("/System/Library/Fonts/Supplemental/Arial.ttf", "rb");
+    const char *fallback_paths[] = {
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/usr/share/fonts/TTF/arial.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "C:\\Windows\\Fonts\\arial.ttf"
+    };
+    FILE *f_fallback = NULL;
+    for (int i = 0; i < sizeof(fallback_paths)/sizeof(fallback_paths[0]); i++) {
+        f_fallback = fopen(fallback_paths[i], "rb");
+        if (f_fallback) {
+            fprintf(stderr, "Using fallback font: %s\n", fallback_paths[i]);
+            break;
+        }
+    }
     unsigned char *fallback_font_buffer = NULL;
     stbtt_fontinfo fallback_info;
     int has_fallback = 0;

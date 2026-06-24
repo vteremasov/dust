@@ -65,6 +65,25 @@ void draw_oval(float cx, float cy, float rx, float ry, float r, float g, float b
   }
 }
 
+void draw_filled_circle(float cx, float cy, float radius, float r, float g, float b, float a) {
+  int segments = 8;
+  unsigned int center_idx = vertex_count;
+  push_vertex(cx, cy, SOLID_U, SOLID_V, r, g, b, a);
+  
+  for (int i = 0; i < segments; i++) {
+    float angle = (float)i * 2.0f * 3.14159265f / (float)segments;
+    float x = cx + float_cos(angle) * radius;
+    float y = cy + float_sin(angle) * radius;
+    push_vertex(x, y, SOLID_U, SOLID_V, r, g, b, a);
+  }
+  
+  for (int i = 0; i < segments; i++) {
+    push_index(center_idx);
+    push_index(center_idx + 1 + i);
+    push_index(center_idx + 1 + ((i + 1) % segments));
+  }
+}
+
 void draw_oval_border(float cx, float cy, float rx, float ry, float thickness, float r, float g, float b, float a) {
   int segments = 64;
   float prev_x = cx + rx;
@@ -74,9 +93,31 @@ void draw_oval_border(float cx, float cy, float rx, float ry, float thickness, f
     float x = cx + float_cos(angle) * rx;
     float y = cy + float_sin(angle) * ry;
     draw_line(prev_x, prev_y, x, y, thickness, r, g, b, a);
+    draw_filled_circle(prev_x, prev_y, thickness / 2.0f, r, g, b, a);
     prev_x = x;
     prev_y = y;
   }
+}
+
+void draw_triangle(float x1, float y1, float x2, float y2, float x3, float y3, float r, float g, float b, float a) {
+  unsigned int start_idx = vertex_count;
+  push_vertex(x1, y1, SOLID_U, SOLID_V, r, g, b, a);
+  push_vertex(x2, y2, SOLID_U, SOLID_V, r, g, b, a);
+  push_vertex(x3, y3, SOLID_U, SOLID_V, r, g, b, a);
+  
+  push_index(start_idx + 0);
+  push_index(start_idx + 1);
+  push_index(start_idx + 2);
+}
+
+void draw_triangle_border(float x1, float y1, float x2, float y2, float x3, float y3, float thickness, float r, float g, float b, float a) {
+  draw_line(x1, y1, x2, y2, thickness, r, g, b, a);
+  draw_line(x2, y2, x3, y3, thickness, r, g, b, a);
+  draw_line(x3, y3, x1, y1, thickness, r, g, b, a);
+  
+  draw_filled_circle(x1, y1, thickness / 2.0f, r, g, b, a);
+  draw_filled_circle(x2, y2, thickness / 2.0f, r, g, b, a);
+  draw_filled_circle(x3, y3, thickness / 2.0f, r, g, b, a);
 }
 
 void draw_image_rect(float x, float y, float w, float h, float alpha) {
@@ -224,6 +265,19 @@ void draw_node_widget(Node *n, int is_editing, int default_texture_id) {
     if (n->border_a > 0.001f) {
       draw_oval_border(n->x + n->w/2.0f, n->y + n->h/2.0f, n->w/2.0f, n->h/2.0f, 2.0f, n->border_r, n->border_g, n->border_b, n->border_a);
     }
+  } else if (n->type == WIDGET_TRIANGLE) {
+    float x1 = n->x + n->w / 2.0f;
+    float y1 = n->y;
+    float x2 = n->x;
+    float y2 = n->y + n->h;
+    float x3 = n->x + n->w;
+    float y3 = n->y + n->h;
+    if (n->bg_a > 0.001f) {
+      draw_triangle(x1, y1, x2, y2, x3, y3, n->bg_r, n->bg_g, n->bg_b, n->bg_a);
+    }
+    if (n->border_a > 0.001f) {
+      draw_triangle_border(x1, y1, x2, y2, x3, y3, 2.0f, n->border_r, n->border_g, n->border_b, n->border_a);
+    }
   } else if (n->type == WIDGET_IMAGE) {
     // Image shape!
     if (n->texture_id != -1) {
@@ -238,6 +292,8 @@ void draw_node_widget(Node *n, int is_editing, int default_texture_id) {
     }
   } else if (n->type == WIDGET_PATH) {
     extern PathPoint path_points[];
+    float thickness = 3.5f;
+    float radius = thickness / 2.0f;
     for (int i = 0; i < n->path_point_len - 1; i++) {
       PathPoint p1 = path_points[n->path_start_idx + i];
       PathPoint p2 = path_points[n->path_start_idx + i + 1];
@@ -247,7 +303,11 @@ void draw_node_widget(Node *n, int is_editing, int default_texture_id) {
       float x2 = n->x + p2.x;
       float y2 = n->y + p2.y;
       
-      draw_line(x1, y1, x2, y2, 3.5f, n->bg_r, n->bg_g, n->bg_b, n->bg_a);
+      draw_line(x1, y1, x2, y2, thickness, n->bg_r, n->bg_g, n->bg_b, n->bg_a);
+      draw_filled_circle(x1, y1, radius, n->bg_r, n->bg_g, n->bg_b, n->bg_a);
+      if (i == n->path_point_len - 2) {
+        draw_filled_circle(x2, y2, radius, n->bg_r, n->bg_g, n->bg_b, n->bg_a);
+      }
     }
   } else if (n->type == WIDGET_ARROW) {
     int from = n->path_start_idx;

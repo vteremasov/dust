@@ -32,6 +32,92 @@ function numMipLevels(width, height) {
     return 1 + Math.floor(Math.log2(Math.max(width, height)));
 }
 
+let mipmapPipeline = null;
+let mipmapSampler = null;
+
+function generateMipmaps(texture, width, height) {
+    const mipCount = numMipLevels(width, height);
+    if (mipCount <= 1) return;
+
+    if (!mipmapPipeline) {
+        const mipmapShaderModule = device.createShaderModule({
+            code: mipmapWgslCode
+        });
+
+        mipmapSampler = device.createSampler({
+            minFilter: 'linear',
+            magFilter: 'linear',
+        });
+
+        mipmapPipeline = device.createRenderPipeline({
+            layout: 'auto',
+            vertex: {
+                module: mipmapShaderModule,
+                entryPoint: 'vs',
+            },
+            fragment: {
+                module: mipmapShaderModule,
+                entryPoint: 'fs',
+                targets: [{
+                    format: 'rgba8unorm',
+                }],
+            },
+            primitive: {
+                topology: 'triangle-list',
+            },
+        });
+    }
+
+    const encoder = device.createCommandEncoder();
+
+    let currentWidth = width;
+    let currentHeight = height;
+
+    for (let i = 1; i < mipCount; i++) {
+        const nextWidth = Math.max(1, currentWidth >> 1);
+        const nextHeight = Math.max(1, currentHeight >> 1);
+
+        const passEncoder = encoder.beginRenderPass({
+            colorAttachments: [{
+                view: texture.createView({
+                    baseMipLevel: i,
+                    mipLevelCount: 1,
+                }),
+                loadOp: 'clear',
+                storeOp: 'store',
+                clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 0.0 },
+            }],
+        });
+
+        const bindGroup = device.createBindGroup({
+            layout: mipmapPipeline.getBindGroupLayout(0),
+            entries: [
+                {
+                    binding: 0,
+                    resource: texture.createView({
+                        baseMipLevel: i - 1,
+                        mipLevelCount: 1,
+                    }),
+                },
+                {
+                    binding: 1,
+                    resource: mipmapSampler,
+                },
+            ],
+        });
+
+        passEncoder.setPipeline(mipmapPipeline);
+        passEncoder.setBindGroup(0, bindGroup);
+        passEncoder.draw(3);
+        passEncoder.end();
+
+        currentWidth = nextWidth;
+        currentHeight = nextHeight;
+    }
+
+    device.queue.submit([encoder.finish()]);
+}
+
 function updateEditorStyle() {
     const editor = document.getElementById('text-editor');
     if (!editor || editor.style.display !== 'block') return;
@@ -83,6 +169,8 @@ function updateEditorStyle() {
     editor.style.color = textColor;
     editor.style.fontFamily = "'Outfit', sans-serif";
     editor.style.fontWeight = '500';
+    editor.style.fontKerning = 'none';
+    editor.style.fontVariantLigatures = 'none';
     editor.style.textAlign = 'center';
     editor.style.border = 'none';
     editor.style.background = 'transparent';
@@ -363,7 +451,7 @@ function updatePropertiesPanel() {
         const fontGroup = document.getElementById('font-group');
 
         // Font size control visibility (WIDGET_STICKY, RECT, OVAL, TEXT can have text)
-        if (type <= 3) {
+        if (type <= 3 || type === 7) {
             fontGroup.style.display = 'block';
             if (document.activeElement !== document.getElementById('prop-font-size')) {
                 document.getElementById('prop-font-size').value = Math.round(wasmFontSize);
@@ -409,7 +497,7 @@ function updatePropertiesPanel() {
         const textB = wasmInstance.exports.get_node_text_b(selectedIdx);
         document.getElementById('prop-font-color').value = rgbToHex(textR, textG, textB);
 
-        if (type <= 3) {
+        if (type <= 3 || type === 7) {
             document.getElementById('font-color-group').style.display = 'block';
         } else {
             document.getElementById('font-color-group').style.display = 'none';
@@ -559,8 +647,9 @@ async function start() {
         const canvas = document.getElementById('canvas');
         const width = window.innerWidth;
         const height = window.innerHeight;
-        canvas.width = width;
-        canvas.height = height;
+        const dpr = window.devicePixelRatio || 1.0;
+        canvas.width = Math.round(width * dpr);
+        canvas.height = Math.round(height * dpr);
 
         if (!navigator.gpu) {
             throw new Error("WebGPU is not supported in this browser. Ensure you are using localhost or HTTPS.");
@@ -862,8 +951,9 @@ function setupInputHandlers() {
     window.addEventListener('resize', () => {
         const w = window.innerWidth;
         const h = window.innerHeight;
-        canvas.width = w;
-        canvas.height = h;
+        const dpr = window.devicePixelRatio || 1.0;
+        canvas.width = Math.round(w * dpr);
+        canvas.height = Math.round(h * dpr);
         updateMsaaTexture();
         wasmInstance.exports.on_resize(w, h);
     });
@@ -915,6 +1005,12 @@ function setupInputHandlers() {
         commitText();
         const center = getScreenCenterInWorld();
         wasmInstance.exports.add_widget_wasm(2, center.x, center.y, -1, 0, 0);
+    });
+
+    document.getElementById('btn-add-triangle').addEventListener('click', () => {
+        commitText();
+        const center = getScreenCenterInWorld();
+        wasmInstance.exports.add_widget_wasm(7, center.x, center.y, -1, 0, 0);
     });
 
     document.getElementById('btn-add-text').addEventListener('click', () => {

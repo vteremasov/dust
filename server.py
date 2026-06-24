@@ -17,6 +17,7 @@ MyHTTPRequestHandler.extensions_map.update({
     '.html': 'text/html',
     '.css': 'text/css',
     '.wgsl': 'text/plain',
+    '.ttf': 'font/ttf',
 })
 
 print(f"Starting server on http://localhost:{PORT}")

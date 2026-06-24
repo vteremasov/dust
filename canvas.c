@@ -401,7 +401,7 @@ void add_node_full(WidgetType type, float world_x, float world_y, float w,
   n->border_r = n->bg_r * 0.7f;
   n->border_g = n->bg_g * 0.7f;
   n->border_b = n->bg_b * 0.7f;
-  if (type == WIDGET_RECT || type == WIDGET_OVAL) {
+  if (type == WIDGET_RECT || type == WIDGET_OVAL || type == WIDGET_TRIANGLE) {
     n->border_a = 1.0f;
   } else {
     n->border_a = 0.0f;
@@ -548,6 +548,8 @@ int is_resizing_node = 0;
 int arrow_tool_active = 0;
 float drag_offset_x = 0.0f;
 float drag_offset_y = 0.0f;
+float resize_initial_w = 150.0f;
+float resize_initial_h = 150.0f;
 
 int is_selecting_marquee = 0;
 float marquee_start_x = 0.0f;
@@ -830,6 +832,32 @@ __attribute__((visibility("default"))) void on_resize(int width, int height) {
   uniforms.screen_height = (float)height;
 }
 
+void clamp_node_size_with_aspect(Node *n, float *w, float *h) {
+  if (n->type == WIDGET_STICKY) {
+    if (*w < 40.0f) {
+      *w = 40.0f;
+    }
+    *h = *w;
+  } else if (n->type == WIDGET_IMAGE) {
+    if (n->h > 0.0f) {
+      float aspect = n->w / n->h;
+      if (*w < 40.0f) {
+        *w = 40.0f;
+        *h = 40.0f / aspect;
+      }
+      if (*h < 20.0f) {
+        *h = 20.0f;
+        *w = 20.0f * aspect;
+      }
+    }
+  } else {
+    if (*w < 40.0f)
+      *w = 40.0f;
+    if (*h < 20.0f)
+      *h = 20.0f;
+  }
+}
+
 __attribute__((visibility("default"))) void
 on_mouse_down(int button, float x, float y, int shift, int ctrl) {
   // Determine world coordinates
@@ -868,6 +896,8 @@ on_mouse_down(int button, float x, float y, int shift, int ctrl) {
     is_resizing_node = 1;
     drag_offset_x = world_x - nodes[selected_node_idx].w;
     drag_offset_y = world_y - nodes[selected_node_idx].h;
+    resize_initial_w = nodes[selected_node_idx].w;
+    resize_initial_h = nodes[selected_node_idx].h;
     is_panning = 0;
     is_dragging_node = 0;
     return;
@@ -1062,10 +1092,26 @@ __attribute__((visibility("default"))) void on_mouse_move(float x, float y) {
     Node *sn = &nodes[selected_node_idx];
     float new_w = mouse_world_x - drag_offset_x;
     float new_h = mouse_world_y - drag_offset_y;
-    if (new_w < 40.0f)
-      new_w = 40.0f;
-    if (new_h < 20.0f)
-      new_h = 20.0f;
+    if (sn->type == WIDGET_STICKY || sn->type == WIDGET_IMAGE) {
+      if (resize_initial_w > 0.0f && resize_initial_h > 0.0f) {
+        float scale_w = new_w / resize_initial_w;
+        float scale_h = new_h / resize_initial_h;
+        float scale = (scale_w + scale_h) / 2.0f;
+        float min_scale_w = 40.0f / resize_initial_w;
+        float min_scale_h = (sn->type == WIDGET_STICKY) ? (40.0f / resize_initial_h) : (20.0f / resize_initial_h);
+        float min_scale = (min_scale_w > min_scale_h) ? min_scale_w : min_scale_h;
+        if (scale < min_scale) {
+          scale = min_scale;
+        }
+        new_w = resize_initial_w * scale;
+        new_h = resize_initial_h * scale;
+      }
+    } else {
+      if (new_w < 40.0f)
+        new_w = 40.0f;
+      if (new_h < 20.0f)
+        new_h = 20.0f;
+    }
     sn->w = new_w;
     sn->h = new_h;
     if (sn->type != WIDGET_IMAGE && sn->type != WIDGET_PATH) {
@@ -1451,21 +1497,70 @@ float get_char_advance(uint32_t codepoint) {
 __attribute__((visibility("default"))) void set_node_size(int idx, float w,
                                                           float h) {
   if (idx >= 0 && idx < node_count) {
+    int width_changed = (w != nodes[idx].w);
+    int height_changed = (h != nodes[idx].h);
+
     if (nodes[idx].selected) {
       for (int i = 0; i < node_count; i++) {
         if (nodes[i].selected) {
-          nodes[i].w = w;
-          nodes[i].h = h;
+          float final_w = w;
+          float final_h = h;
+          if (nodes[i].type == WIDGET_STICKY) {
+            if (height_changed && !width_changed) {
+              final_w = h;
+              final_h = h;
+            } else {
+              final_w = w;
+              final_h = w;
+            }
+          } else if (nodes[i].type == WIDGET_IMAGE) {
+            if (nodes[i].h > 0.0f) {
+              float aspect = nodes[i].w / nodes[i].h;
+              if (height_changed && !width_changed) {
+                final_h = h;
+                final_w = h * aspect;
+              } else {
+                final_w = w;
+                final_h = w / aspect;
+              }
+            }
+          }
+          clamp_node_size_with_aspect(&nodes[i], &final_w, &final_h);
+          nodes[i].w = final_w;
+          nodes[i].h = final_h;
           if (nodes[i].type != WIDGET_IMAGE && nodes[i].type != WIDGET_PATH) {
-            js_init_node_texture(i, nodes[i].text, nodes[i].type, w, h);
+            js_init_node_texture(i, nodes[i].text, nodes[i].type, final_w, final_h);
           }
         }
       }
     } else {
-      nodes[idx].w = w;
-      nodes[idx].h = h;
+      float final_w = w;
+      float final_h = h;
+      if (nodes[idx].type == WIDGET_STICKY) {
+        if (height_changed && !width_changed) {
+          final_w = h;
+          final_h = h;
+        } else {
+          final_w = w;
+          final_h = w;
+        }
+      } else if (nodes[idx].type == WIDGET_IMAGE) {
+        if (nodes[idx].h > 0.0f) {
+          float aspect = nodes[idx].w / nodes[idx].h;
+          if (height_changed && !width_changed) {
+            final_h = h;
+            final_w = h * aspect;
+          } else {
+            final_w = w;
+            final_h = w / aspect;
+          }
+        }
+      }
+      clamp_node_size_with_aspect(&nodes[idx], &final_w, &final_h);
+      nodes[idx].w = final_w;
+      nodes[idx].h = final_h;
       if (nodes[idx].type != WIDGET_IMAGE && nodes[idx].type != WIDGET_PATH) {
-        js_init_node_texture(idx, nodes[idx].text, nodes[idx].type, w, h);
+        js_init_node_texture(idx, nodes[idx].text, nodes[idx].type, final_w, final_h);
       }
     }
   }
@@ -1599,6 +1694,8 @@ add_widget_wasm(int type, float x, float y, int texture_id, int img_w,
   } else if (type == WIDGET_TEXT) {
     default_text = "Text";
     h = 30.0f;
+  } else if (type == WIDGET_TRIANGLE) {
+    default_text = "Triangle";
   } else if (type == WIDGET_IMAGE) {
     // Keep aspect ratio for the image, max size 200px
     float aspect = (float)img_w / (float)img_h;
@@ -1837,7 +1934,7 @@ __attribute__((visibility("default"))) void tick_app(float timestamp) {
 
     // Count shapes
     if (n->type == WIDGET_STICKY || n->type == WIDGET_RECT ||
-        n->type == WIDGET_OVAL) {
+        n->type == WIDGET_OVAL || n->type == WIDGET_TRIANGLE) {
       shapes_count++;
     }
 

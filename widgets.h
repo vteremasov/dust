@@ -8,7 +8,8 @@ typedef enum {
   WIDGET_TEXT = 3,
   WIDGET_IMAGE = 4,
   WIDGET_PATH = 5,
-  WIDGET_ARROW = 6
+  WIDGET_ARROW = 6,
+  WIDGET_TRIANGLE = 7
 } WidgetType;
 
 typedef struct {
