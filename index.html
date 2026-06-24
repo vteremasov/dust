@@ -72,27 +72,14 @@
                         0 0 15px var(--accent-glow);
         }
 
-        #app-title {
-            top: 20px;
-            left: 20px;
-            width: 200px;
-            padding: 12px 20px;
-        }
 
-        #app-title h1 {
-            margin-bottom: 2px;
-        }
-
-        #app-title .subtitle {
-            margin-bottom: 0;
-        }
 
         #toolbar {
-            top: 80px;
-            left: 20px;
-            width: 56px;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
             display: flex;
-            flex-direction: column;
+            flex-direction: row;
             gap: 8px;
             padding: 8px;
             align-items: center;
@@ -130,10 +117,10 @@
         }
 
         .toolbar-divider {
-            width: 24px;
-            height: 1px;
+            width: 1px;
+            height: 24px;
             background: rgba(255, 255, 255, 0.15);
-            margin: 4px 0;
+            margin: 0 4px;
         }
 
         #info-panel {
@@ -333,6 +320,67 @@
             border: 1px solid rgba(255, 255, 255, 0.2);
             border-radius: 6px;
         }
+
+        #properties-panel {
+            bottom: 80px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: none;
+            flex-direction: row;
+            gap: 8px;
+            padding: 6px 8px;
+            align-items: center;
+            width: auto;
+        }
+
+        .prop-size-input {
+            width: 48px;
+        }
+
+        .prop-font-input {
+            width: 44px;
+        }
+
+        .prop-color-group {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        #properties-panel input[type="checkbox"] {
+            cursor: pointer;
+            width: 14px;
+            height: 14px;
+            accent-color: var(--accent);
+        }
+
+        #properties-panel .input-field {
+            padding: 4px 6px;
+            font-size: 0.75rem;
+            border-radius: 4px;
+        }
+
+        #properties-panel .color-picker {
+            width: 24px;
+            height: 24px;
+            border-radius: 4px;
+        }
+
+        #properties-panel .color-picker::-webkit-color-swatch {
+            border-radius: 4px;
+        }
+
+        #properties-panel .btn-widget {
+            width: 32px;
+            height: 32px;
+            padding: 0;
+            margin: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            border-radius: 6px;
+            box-shadow: none;
+        }
     </style>
 </head>
 <body>
@@ -348,10 +396,7 @@
     <!-- Hidden text input helper for double click editing -->
     <textarea id="text-editor" maxlength="120"></textarea>
 
-    <!-- Glassmorphic App Title -->
-    <div id="app-title" class="glass-panel">
-        <h1>Infinity Canvas</h1>
-    </div>
+
 
     <!-- Glassmorphic Toolbar -->
     <div id="toolbar" class="glass-panel">
@@ -430,66 +475,66 @@
     </div>
 
     <!-- Properties Inspector Panel -->
-    <div id="properties-panel" class="glass-panel" style="display: none; top: 20px; right: 20px; width: 200px;">
-        <h2 style="font-size: 1.1rem; font-weight: 800; margin-bottom: 12px; background: linear-gradient(135deg, #fff 30%, var(--text-muted)); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">Properties</h2>
+    <div id="properties-panel" class="glass-panel" style="display: none;">
+        <!-- Group 1: Size -->
+        <div id="size-group" style="display: flex; gap: 8px; align-items: center;">
+            <input type="number" id="prop-w" class="input-field prop-size-input" title="Width" placeholder="W" min="10">
+            <input type="number" id="prop-h" class="input-field prop-size-input" title="Height" placeholder="H" min="10">
+            <div class="toolbar-divider"></div>
+        </div>
         
-        <div class="control-group" id="size-group">
-            <div class="control-label">Size</div>
-            <div style="display: flex; gap: 8px;">
-                <div style="flex: 1;">
-                    <span style="font-size: 0.7rem; color: var(--text-muted); display: block; margin-bottom: 2px;">Width</span>
-                    <input type="number" id="prop-w" class="input-field" style="width: 100%;" min="10">
-                </div>
-                <div style="flex: 1;">
-                    <span style="font-size: 0.7rem; color: var(--text-muted); display: block; margin-bottom: 2px;">Height</span>
-                    <input type="number" id="prop-h" class="input-field" style="width: 100%;" min="10">
-                </div>
-            </div>
+        <!-- Group 2: Typography -->
+        <div id="font-group" style="display: flex; gap: 8px; align-items: center;">
+            <input type="number" id="prop-font-size" class="input-field prop-font-input" title="Font Size (px)" placeholder="Size" min="6" max="120">
+            <div class="toolbar-divider"></div>
         </div>
-
-        <div class="control-group" id="font-group">
-            <div class="control-label">Typography</div>
-            <div>
-                <span style="font-size: 0.7rem; color: var(--text-muted); display: block; margin-bottom: 2px;">Font Size (px)</span>
-                <input type="number" id="prop-font-size" class="input-field" style="width: 100%;" min="6" max="120">
-            </div>
+        
+        <!-- Group 3: Background / Line Color -->
+        <span id="bg-color-label" style="display: none;"></span>
+        <div class="prop-color-group" style="display: flex; gap: 6px; align-items: center;">
+            <input type="color" id="prop-bg-color" class="color-picker" title="Background Color">
+            <input type="checkbox" id="prop-bg-transparent" title="Transparent Background">
         </div>
-
-        <div class="control-group">
-            <div class="control-label" id="bg-color-label">Background</div>
-            <div style="display: flex; align-items: center; gap: 10px;">
-                <input type="color" id="prop-bg-color" class="color-picker">
-                <label style="font-size: 0.85rem; display: flex; align-items: center; gap: 6px; cursor: pointer;">
-                    <input type="checkbox" id="prop-bg-transparent"> Transparent
-                </label>
-            </div>
+        
+        <div class="toolbar-divider"></div>
+        
+        <!-- Group 4: Font Color -->
+        <div id="font-color-group" style="display: flex; gap: 8px; align-items: center;">
+            <input type="color" id="prop-font-color" class="color-picker" title="Font Color">
+            <div class="toolbar-divider"></div>
         </div>
-
-        <div class="control-group" id="font-color-group">
-            <div class="control-label">Font Color</div>
-            <div style="display: flex; align-items: center; gap: 10px;">
-                <input type="color" id="prop-font-color" class="color-picker">
+        
+        <!-- Group 5: Border -->
+        <div id="border-group" style="display: flex; gap: 8px; align-items: center;">
+            <div class="prop-color-group" style="display: flex; gap: 6px; align-items: center;">
+                <input type="color" id="prop-border-color" class="color-picker" title="Border Color">
+                <input type="checkbox" id="prop-border-transparent" title="No Border">
             </div>
+            <div class="toolbar-divider"></div>
         </div>
-
-        <div class="control-group" id="border-group">
-            <div class="control-label">Border</div>
-            <div style="display: flex; align-items: center; gap: 10px;">
-                <input type="color" id="prop-border-color" class="color-picker">
-                <label style="font-size: 0.85rem; display: flex; align-items: center; gap: 6px; cursor: pointer;">
-                    <input type="checkbox" id="prop-border-transparent"> None
-                </label>
-            </div>
-        </div>
-
-        <div class="control-group" style="margin-bottom: 0;">
-            <div class="control-label">Arrangement (Z-Order)</div>
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px;">
-                <button id="btn-z-front" class="btn btn-secondary btn-widget">To Front</button>
-                <button id="btn-z-back" class="btn btn-secondary btn-widget">To Back</button>
-                <button id="btn-z-forward" class="btn btn-secondary btn-widget">Forward</button>
-                <button id="btn-z-backward" class="btn btn-secondary btn-widget">Backward</button>
-            </div>
+        
+        <!-- Group 6: Z-Order -->
+        <div style="display: flex; gap: 6px; align-items: center;">
+            <button id="btn-z-front" class="btn btn-secondary btn-widget" title="Bring to Front">
+                <svg style="width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2;" viewBox="0 0 24 24">
+                    <path d="M5 4h14M12 20V8m0 0l-5 5m5-5l5 5" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            </button>
+            <button id="btn-z-forward" class="btn btn-secondary btn-widget" title="Bring Forward">
+                <svg style="width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2;" viewBox="0 0 24 24">
+                    <path d="M12 20V4m0 0l-7 7m7-7l7 7" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            </button>
+            <button id="btn-z-backward" class="btn btn-secondary btn-widget" title="Send Backward">
+                <svg style="width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2;" viewBox="0 0 24 24">
+                    <path d="M12 4v16m0 0l-7-7m7 7l7-7" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            </button>
+            <button id="btn-z-back" class="btn btn-secondary btn-widget" title="Send to Back">
+                <svg style="width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2;" viewBox="0 0 24 24">
+                    <path d="M5 20h14M12 4v12m0 0l-5-5m5 5l5-5" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            </button>
         </div>
     </div>
 

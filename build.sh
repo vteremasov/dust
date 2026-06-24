@@ -14,5 +14,5 @@ clang --target=wasm32 \
   -Wl,--no-entry \
   -Wl,--export-all \
   -Wl,--allow-undefined \
-  -o canvas.wasm canvas.c
+  -o canvas.wasm canvas.c ecs.c systems.c initial_content.c
 

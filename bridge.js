@@ -362,7 +362,6 @@ const importObject = {
 const editor = document.getElementById('text-editor');
 
 function commitText() {
-    console.log('commitText');
     if (editor.style.display === 'block') {
         const ptr = parseInt(editor.dataset.ptr);
         const maxLen = parseInt(editor.dataset.maxLen);
@@ -424,7 +423,7 @@ function updatePropertiesPanel() {
         return;
     }
 
-    panel.style.display = 'block';
+    panel.style.display = 'flex';
 
     // Query parameters from WASM
     const w = wasmInstance.exports.get_node_width(selectedIdx);
@@ -452,7 +451,7 @@ function updatePropertiesPanel() {
 
         // Font size control visibility (WIDGET_STICKY, RECT, OVAL, TEXT can have text)
         if (type <= 3 || type === 7) {
-            fontGroup.style.display = 'block';
+            fontGroup.style.display = 'flex';
             if (document.activeElement !== document.getElementById('prop-font-size')) {
                 document.getElementById('prop-font-size').value = Math.round(wasmFontSize);
             }
@@ -465,7 +464,7 @@ function updatePropertiesPanel() {
             borderGroup.style.display = 'none';
             bgColorLabel.innerText = "Line Color";
         } else {
-            sizeGroup.style.display = 'block';
+            sizeGroup.style.display = 'flex';
             if (document.activeElement !== document.getElementById('prop-w')) {
                 document.getElementById('prop-w').value = Math.round(w);
             }
@@ -477,7 +476,7 @@ function updatePropertiesPanel() {
             if (type === 3 || type === 4) {
                 borderGroup.style.display = 'none';
             } else {
-                borderGroup.style.display = 'block';
+                borderGroup.style.display = 'flex';
             }
         }
 
@@ -498,7 +497,7 @@ function updatePropertiesPanel() {
         document.getElementById('prop-font-color').value = rgbToHex(textR, textG, textB);
 
         if (type <= 3 || type === 7) {
-            document.getElementById('font-color-group').style.display = 'block';
+            document.getElementById('font-color-group').style.display = 'flex';
         } else {
             document.getElementById('font-color-group').style.display = 'none';
         }
@@ -941,7 +940,142 @@ function setupInputHandlers() {
     canvas.addEventListener('wheel', (e) => {
         e.preventDefault();
         const coords = getCanvasCoords(e);
-        wasmInstance.exports.on_mouse_wheel(e.deltaY, coords.x, coords.y);
+        if (e.ctrlKey) {
+            // Trackpad pinch-to-zoom gesture
+            wasmInstance.exports.on_mouse_wheel(e.deltaY, coords.x, coords.y);
+        } else {
+            // Trackpad two-finger scroll panning
+            wasmInstance.exports.pan_canvas(-e.deltaX, -e.deltaY);
+        }
+    }, { passive: false });
+
+    // Touch screen state trackers
+    let lastTouchX = 0;
+    let lastTouchY = 0;
+    let isTouchDrawing = false;
+    
+    // Two-finger touch trackers
+    let lastTouchDist = 0;
+    let lastTouchMidX = 0;
+    let lastTouchMidY = 0;
+    let isTwoFingerTouch = false;
+
+    function getTouchCoords(touch) {
+        const rect = canvas.getBoundingClientRect();
+        return {
+            x: touch.clientX - rect.left,
+            y: touch.clientY - rect.top
+        };
+    }
+
+    canvas.addEventListener('touchstart', (e) => {
+        commitText();
+
+        if (e.touches.length === 1) {
+            isTwoFingerTouch = false;
+            const touch = e.touches[0];
+            const coords = getTouchCoords(touch);
+            lastTouchX = coords.x;
+            lastTouchY = coords.y;
+
+            if (isDrawMode) {
+                isTouchDrawing = true;
+                const wCoords = getWorldCoords(touch.clientX, touch.clientY);
+                const hex = document.getElementById('draw-color-picker').value || '#1accde';
+                const rgb = hexToRgb(hex);
+                wasmInstance.exports.start_stroke(wCoords.x, wCoords.y, rgb.r, rgb.g, rgb.b);
+            } else {
+                const forceShift = isArrowMode ? 1 : 0;
+                wasmInstance.exports.on_mouse_down(0, coords.x, coords.y, forceShift, 0);
+            }
+        } else if (e.touches.length === 2) {
+            isTwoFingerTouch = true;
+            if (isTouchDrawing) {
+                wasmInstance.exports.end_stroke();
+                isTouchDrawing = false;
+            }
+            // Cancel any single-finger drag
+            wasmInstance.exports.on_mouse_up(0, lastTouchX, lastTouchY);
+
+            const t1 = e.touches[0];
+            const t2 = e.touches[1];
+            lastTouchDist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+            lastTouchMidX = (t1.clientX + t2.clientX) / 2;
+            lastTouchMidY = (t1.clientY + t2.clientY) / 2;
+        }
+        e.preventDefault();
+    }, { passive: false });
+
+    canvas.addEventListener('touchmove', (e) => {
+        if (e.touches.length === 1 && !isTwoFingerTouch) {
+            const touch = e.touches[0];
+            const coords = getTouchCoords(touch);
+            lastTouchX = coords.x;
+            lastTouchY = coords.y;
+
+            if (isTouchDrawing) {
+                const wCoords = getWorldCoords(touch.clientX, touch.clientY);
+                wasmInstance.exports.add_stroke_point(wCoords.x, wCoords.y);
+            } else {
+                wasmInstance.exports.on_mouse_move(coords.x, coords.y);
+            }
+        } else if (e.touches.length === 2) {
+            const t1 = e.touches[0];
+            const t2 = e.touches[1];
+            const dist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+            const midX = (t1.clientX + t2.clientX) / 2;
+            const midY = (t1.clientY + t2.clientY) / 2;
+
+            // Pan midpoint difference
+            const dx = midX - lastTouchMidX;
+            const dy = midY - lastTouchMidY;
+            wasmInstance.exports.pan_canvas(dx, dy);
+
+            // Zoom distance difference
+            if (Math.abs(dist - lastTouchDist) > 1) {
+                const deltaY = (lastTouchDist - dist) * 1.5;
+                const rect = canvas.getBoundingClientRect();
+                const canvasMidX = midX - rect.left;
+                const canvasMidY = midY - rect.top;
+                wasmInstance.exports.on_mouse_wheel(deltaY, canvasMidX, canvasMidY);
+            }
+
+            lastTouchDist = dist;
+            lastTouchMidX = midX;
+            lastTouchMidY = midY;
+        }
+        e.preventDefault();
+    }, { passive: false });
+
+    canvas.addEventListener('touchend', (e) => {
+        if (isTouchDrawing) {
+            wasmInstance.exports.end_stroke();
+            isTouchDrawing = false;
+        } else if (!isTwoFingerTouch) {
+            wasmInstance.exports.on_mouse_up(0, lastTouchX, lastTouchY);
+        }
+
+        if (e.touches.length === 0) {
+            isTwoFingerTouch = false;
+        } else if (e.touches.length === 1) {
+            // Degrade to single touch pan starting point
+            isTwoFingerTouch = false;
+            const touch = e.touches[0];
+            const coords = getTouchCoords(touch);
+            lastTouchX = coords.x;
+            lastTouchY = coords.y;
+        }
+        e.preventDefault();
+    }, { passive: false });
+
+    canvas.addEventListener('touchcancel', (e) => {
+        if (isTouchDrawing) {
+            wasmInstance.exports.end_stroke();
+            isTouchDrawing = false;
+        } else {
+            wasmInstance.exports.on_mouse_up(0, lastTouchX, lastTouchY);
+        }
+        isTwoFingerTouch = false;
     }, { passive: false });
 
     canvas.addEventListener('contextmenu', (e) => {
