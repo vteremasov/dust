@@ -16,12 +16,13 @@ MyHTTPRequestHandler.extensions_map.update({
     '.js': 'application/javascript',
     '.html': 'text/html',
     '.css': 'text/css',
+    '.wgsl': 'text/plain',
 })
 
 print(f"Starting server on http://localhost:{PORT}")
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
-socketserver.TCPServer.allow_reuse_address = True
-with socketserver.TCPServer(("", PORT), MyHTTPRequestHandler) as httpd:
+socketserver.ThreadingTCPServer.allow_reuse_address = True
+with socketserver.ThreadingTCPServer(("", PORT), MyHTTPRequestHandler) as httpd:
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

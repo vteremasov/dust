@@ -6,7 +6,7 @@
     <title>Infinity Canvas - WebGPU & Pure C</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;800&display=swap" rel="stylesheet">
     <style>
         :root {
             --bg-color: #0b0d11;
@@ -336,7 +336,7 @@
     <canvas id="canvas"></canvas>
 
     <!-- Hidden text input helper for double click editing -->
-    <textarea id="text-editor" maxlength="250"></textarea>
+    <textarea id="text-editor" maxlength="120"></textarea>
 
     <!-- Glassmorphic App Title -->
     <div id="app-title" class="glass-panel">
@@ -395,6 +395,14 @@
 
         <div class="toolbar-divider"></div>
 
+        <button class="btn btn-secondary" id="btn-bulk-create" title="Create 100k Infographics (Reset Board)">
+            <svg style="width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2;" viewBox="0 0 24 24">
+                <rect x="3" y="3" width="7" height="7" rx="1"/>
+                <rect x="14" y="3" width="7" height="7" rx="1"/>
+                <rect x="3" y="14" width="7" height="7" rx="1"/>
+                <rect x="14" y="14" width="7" height="7" rx="1"/>
+            </svg>
+        </button>
         <button class="btn btn-secondary" id="btn-clear" title="Clear all nodes and connections from the board">
             <svg style="width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2;" viewBox="0 0 24 24">
                 <polyline points="3 6 5 6 21 6"/>
@@ -442,6 +450,13 @@
             </div>
         </div>
 
+        <div class="control-group" id="font-color-group">
+            <div class="control-label">Font Color</div>
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <input type="color" id="prop-font-color" class="color-picker">
+            </div>
+        </div>
+
         <div class="control-group" id="border-group">
             <div class="control-label">Border</div>
             <div style="display: flex; align-items: center; gap: 10px;">
@@ -469,7 +484,7 @@
         <span style="margin: 0 10px;">|</span>
         <span>Zoom: </span><span id="stat-zoom" style="font-weight: 600; color: var(--text-color);">100%</span>
         <span style="margin: 0 10px;">|</span>
-        <span>Notes: </span><span id="stat-nodes" style="font-weight: 600; color: var(--text-color);">0</span>
+        <span>Shapes: </span><span id="stat-nodes" style="font-weight: 600; color: var(--text-color);">0</span>
     </div>
 
     <script type="module" src="bridge.js"></script>

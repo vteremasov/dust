@@ -11,6 +11,7 @@ let shaderModule = null;
 let sampler = null;
 let bindGroupLayout = null;
 let pipeline = null;
+let fontAtlasBitmap = null;
 
 let commandEncoder = null;
 let renderPass = null;
@@ -27,100 +28,66 @@ let currentZoom = 1.0;
 let currentPanX = 0.0;
 let currentPanY = 0.0;
 
-function generateFontAtlasTexture() {
-    const atlasCanvas = document.createElement('canvas');
-    const cellW = 64;
-    const cellH = 64;
-    atlasCanvas.width = cellW * 16; // 1024
-    atlasCanvas.height = cellH * 16; // 1024
-    const ctx = atlasCanvas.getContext('2d');
-    
-    ctx.fillStyle = 'black';
-    ctx.fillRect(0, 0, atlasCanvas.width, atlasCanvas.height);
-    
-    ctx.fillStyle = 'white';
-    ctx.font = 'bold 44px Outfit, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    
-    // Character 1 (SOLID block for shapes)
-    ctx.fillRect(cellW, 0, cellW, cellH);
-    
-    for (let c = 0; c < 256; c++) {
-        if (c === 1) continue; // Skip solid block character
-        const col = c % 16;
-        const row = Math.floor(c / 16);
-        const char = String.fromCharCode(c);
-        
-        // Only draw printable characters
-        if (c >= 32 && c < 127) {
-            ctx.fillText(char, col * cellW + cellW / 2, row * cellH + cellH / 2);
-        }
-    }
-    
-    const imgData = ctx.getImageData(0, 0, atlasCanvas.width, atlasCanvas.height);
-    const pixels = new Uint32Array(atlasCanvas.width * atlasCanvas.height);
-    for (let i = 0; i < imgData.data.length / 4; i++) {
-        const r = imgData.data[i * 4];
-        pixels[i] = (r << 24) | (r << 16) | (r << 8) | r;
-    }
-    
-    return {
-        width: atlasCanvas.width,
-        height: atlasCanvas.height,
-        pixels: new Uint8Array(pixels.buffer),
-        canvas: atlasCanvas
-    };
-}
-
 function numMipLevels(width, height) {
     return 1 + Math.floor(Math.log2(Math.max(width, height)));
 }
 
-// Generate mipmaps from a source canvas using Canvas 2D's built-in high-quality downscaling
-function generateMipmapsFromCanvas(texture, sourceCanvas, width, height) {
-    const mipCount = numMipLevels(width, height);
-    if (mipCount <= 1) return;
-
-    let prevCanvas = sourceCanvas;
-    let w = width;
-    let h = height;
-
-    for (let level = 1; level < mipCount; level++) {
-        w = Math.max(1, w >> 1);
-        h = Math.max(1, h >> 1);
-
-        const mipCanvas = document.createElement('canvas');
-        mipCanvas.width = w;
-        mipCanvas.height = h;
-        const ctx = mipCanvas.getContext('2d');
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = 'high';
-        ctx.drawImage(prevCanvas, 0, 0, w, h);
-
-        const imgData = ctx.getImageData(0, 0, w, h);
-        device.queue.writeTexture(
-            { texture, mipLevel: level },
-            imgData.data,
-            { bytesPerRow: w * 4 },
-            [w, h]
-        );
-
-        prevCanvas = mipCanvas;
-    }
-}
-
 function updateEditorStyle() {
     const editor = document.getElementById('text-editor');
-    if (!editor) return;
+    if (!editor || editor.style.display !== 'block') return;
+
+    const idxStr = editor.dataset.idx;
+    if (idxStr === undefined) return;
+    const idx = parseInt(idxStr);
+
+    // Retrieve active properties from WASM
+    const x = wasmInstance.exports.get_node_x(idx);
+    const y = wasmInstance.exports.get_node_y(idx);
+    const w = wasmInstance.exports.get_node_width(idx);
+    const h = wasmInstance.exports.get_node_height(idx);
+    const wasmFontSize = wasmInstance.exports.get_node_font_size(idx);
+
+    const tr = wasmInstance.exports.get_node_text_r(idx);
+    const tg = wasmInstance.exports.get_node_text_g(idx);
+    const tb = wasmInstance.exports.get_node_text_b(idx);
+    const textColor = rgbToHex(tr, tg, tb);
+
+    // Calculate screen position and dimensions
+    const sx = x * currentZoom + currentPanX;
+    const sy = y * currentZoom + currentPanY;
+    const sWidth = w * currentZoom;
+    const sHeight = h * currentZoom;
+
+    // Apply positioning
+    editor.style.left = `${sx}px`;
+    editor.style.top = `${sy}px`;
+    editor.style.width = `${sWidth}px`;
+    editor.style.height = `${sHeight}px`;
+
+    // Apply font size and alignment styles (scaled by 1 / 1.26 to match canvas rendering size)
+    const fontSize = (wasmFontSize * currentZoom) / 1.26;
+    const lineHeight = 1.2 * wasmFontSize * currentZoom; // Exact canvas line height (char_h + line_spacing)
     const lines = editor.value.split('\n');
     const N = lines.length;
-    const fontSize = 18 * currentZoom;
-    const lineHeight = 1.25 * fontSize;
-    const h = parseFloat(editor.dataset.h || '80');
-    const cardHeight = h * currentZoom;
-    const paddingTop = Math.max(0, (cardHeight - N * lineHeight) / 2);
+    const paddingTop = Math.max(0, (sHeight - N * lineHeight) / 2);
+
+    editor.style.fontSize = `${fontSize}px`;
+    editor.style.lineHeight = `${lineHeight}px`;
     editor.style.paddingTop = `${paddingTop}px`;
+    editor.style.paddingLeft = `${10 * currentZoom}px`;
+    editor.style.paddingRight = `${10 * currentZoom}px`;
+    editor.style.paddingBottom = '0px';
+    editor.style.margin = '0px';
+    editor.style.resize = 'none';
+    editor.style.overflow = 'hidden';
+    editor.style.color = textColor;
+    editor.style.fontFamily = "'Outfit', sans-serif";
+    editor.style.fontWeight = '500';
+    editor.style.textAlign = 'center';
+    editor.style.border = 'none';
+    editor.style.background = 'transparent';
+    editor.style.boxShadow = 'none';
+    editor.style.boxSizing = 'border-box';
 }
 
 function getScreenCenterInWorld() {
@@ -132,23 +99,21 @@ function getScreenCenterInWorld() {
 // Helpers to read/write string to shared Wasm memory
 function readString(ptr, len) {
     const view = new Uint8Array(wasmMemory.buffer, ptr, len);
-    let str = "";
+    let actualLen = 0;
     for (let i = 0; i < len; i++) {
         if (view[i] === 0) break;
-        str += String.fromCharCode(view[i]);
+        actualLen++;
     }
-    return str;
+    return new TextDecoder().decode(view.subarray(0, actualLen));
 }
 
 function readNullTerminatedString(ptr) {
     const view = new Uint8Array(wasmMemory.buffer, ptr);
-    let str = "";
-    let i = 0;
-    while (view[i] !== 0) {
-        str += String.fromCharCode(view[i]);
-        i++;
+    let len = 0;
+    while (view[len] !== 0) {
+        len++;
     }
-    return str;
+    return new TextDecoder().decode(view.subarray(0, len));
 }
 
 function writeString(ptr, maxLen, str) {
@@ -180,130 +145,31 @@ const importObject = {
             document.getElementById('stat-zoom').innerText = `${Math.round(zoom * 100)}%`;
             document.getElementById('stat-nodes').innerText = node_count;
         },
-        js_set_editing_state: (is_editing, x, y, w, h, current_text_ptr, max_len, widget_type) => {
+        js_set_editing_state: (is_editing, x, y, w, h, current_text_ptr, max_len, idx) => {
             const editor = document.getElementById('text-editor');
             if (is_editing) {
                 editor.style.display = 'block';
-                editor.style.left = `${x}px`;
-                editor.style.top = `${y}px`;
-                editor.style.width = `${w * currentZoom}px`;
-                editor.style.height = `${h * currentZoom}px`;
-                editor.style.fontSize = `${18 * currentZoom}px`;
-                editor.style.fontFamily = "'Outfit', sans-serif";
-                editor.style.fontWeight = 'bold';
-                editor.style.textAlign = 'center';
-                editor.style.border = 'none';
-                editor.style.background = 'transparent';
-                editor.style.boxShadow = 'none';
-                editor.style.color = (widget_type === 3) ? '#e2e8f0' : '#19232d';
-                editor.style.resize = 'none';
-                editor.style.overflow = 'hidden';
-                editor.style.lineHeight = '1.2';
-                editor.style.boxSizing = 'border-box';
-                editor.style.paddingLeft = `${10 * currentZoom}px`;
-                editor.style.paddingRight = `${10 * currentZoom}px`;
-                
-                editor.value = readNullTerminatedString(current_text_ptr);
+
+                // Store parameters on dataset so we can reference them in updateEditorStyle
+                editor.dataset.ptr = current_text_ptr;
+                editor.dataset.maxLen = max_len;
+                editor.dataset.idx = idx;
                 editor.dataset.h = h;
+
+                editor.value = readNullTerminatedString(current_text_ptr);
                 updateEditorStyle();
-                
+
                 // Delay focus slightly so the browser's default click-focus completes first
                 setTimeout(() => {
                     editor.focus();
                 }, 50);
-                editor.dataset.ptr = current_text_ptr;
-                editor.dataset.maxLen = max_len;
             } else {
                 editor.style.display = 'none';
             }
         },
 
         js_init_node_texture: (idx, text_ptr, type, w, h) => {
-            const text = readNullTerminatedString(text_ptr);
-            let tex_id = wasmInstance.exports.get_node_texture_id(idx);
-
-            // Rasterize text onto a 2D canvas at 4.0x super-sampled resolution for crispness
-            const scale = 4.0;
-            const canvasW = Math.ceil(w * scale);
-            const canvasH = Math.ceil(h * scale);
-
-            if (canvasW <= 0 || canvasH <= 0) {
-                console.warn(`js_init_node_texture called with invalid dimensions: ${canvasW}x${canvasH}`);
-                return;
-            }
-
-            const tempCanvas = document.createElement('canvas');
-            tempCanvas.width = canvasW;
-            tempCanvas.height = canvasH;
-            const ctx = tempCanvas.getContext('2d');
-
-            ctx.clearRect(0, 0, canvasW, canvasH);
-
-            // Color: slate grey '#19232d' for shapes/cards, custom text color for WIDGET_TEXT
-            let textColor = '#19232d';
-            if (type === 3) {
-                const r = wasmInstance.exports.get_node_bg_r(idx);
-                const g = wasmInstance.exports.get_node_bg_g(idx);
-                const b = wasmInstance.exports.get_node_bg_b(idx);
-                textColor = rgbToHex(r, g, b);
-            }
-
-            const wasmFontSize = wasmInstance.exports.get_node_font_size(idx);
-            const fontSize = wasmFontSize * scale;
-            ctx.font = `bold ${fontSize}px Outfit, sans-serif`;
-            ctx.fillStyle = textColor;
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-
-            const lines = text.split('\n');
-            const numLines = lines.length;
-            const lineHeight = fontSize * 1.25;
-            const totalTextHeight = numLines * lineHeight;
-
-            const startY = (canvasH - totalTextHeight) / 2 + lineHeight / 2;
-            const centerX = canvasW / 2;
-
-            for (let i = 0; i < numLines; i++) {
-                ctx.fillText(lines[i], centerX, startY + i * lineHeight);
-            }
-
-            const imgData = ctx.getImageData(0, 0, canvasW, canvasH);
-
-            const mipCount = numMipLevels(canvasW, canvasH);
-            let texture;
-            if (tex_id === -1) {
-                texture = device.createTexture({
-                    size: [canvasW, canvasH],
-                    format: 'rgba8unorm',
-                    mipLevelCount: mipCount,
-                    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST
-                });
-                tex_id = textures.length;
-                textures.push(texture);
-                wasmInstance.exports.set_node_texture_id(idx, tex_id);
-            } else {
-                const existingTexture = textures[tex_id];
-                if (existingTexture.width !== canvasW || existingTexture.height !== canvasH) {
-                    existingTexture.destroy();
-                    texture = device.createTexture({
-                        size: [canvasW, canvasH],
-                        format: 'rgba8unorm',
-                        mipLevelCount: mipCount,
-                        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST
-                    });
-                    textures[tex_id] = texture;
-                } else {
-                    texture = existingTexture;
-                }
-            }
-
-            device.queue.writeTexture(
-                { texture: texture },
-                imgData.data,
-                { bytesPerRow: canvasW * 4 },
-                [canvasW, canvasH]
-            );
-            generateMipmapsFromCanvas(texture, tempCanvas, canvasW, canvasH);
+            // Noop since text is rendered dynamically using the MSDF characters atlas!
         },
 
         js_wgpu_init: (width, height) => {
@@ -327,16 +193,19 @@ const importObject = {
         js_wgpu_create_texture: (width, height) => {
             let actualW = width;
             let actualH = height;
+            let mips = numMipLevels(actualW, actualH);
+            let usage = GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST;
             if (textures.length === 0) {
-                actualW = 1024;
-                actualH = 1024;
+                actualW = 2048;
+                actualH = 2048;
+                mips = 1; // Font atlas has only 1 mip level
+                usage |= GPUTextureUsage.RENDER_ATTACHMENT; // Required for copyExternalImageToTexture
             }
-            const mips = numMipLevels(actualW, actualH);
             const tex = device.createTexture({
                 size: [actualW, actualH],
                 format: 'rgba8unorm',
                 mipLevelCount: mips,
-                usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST
+                usage: usage
             });
             const id = textures.length;
             textures.push(tex);
@@ -348,14 +217,12 @@ const importObject = {
         },
         js_wgpu_write_texture: (texture_id, width, height, data_ptr, size) => {
             if (texture_id === 0) {
-                const atlas = generateFontAtlasTexture();
-                device.queue.writeTexture(
+                // The font atlas is preloaded as font_atlas.png and copied directly using WebGPU
+                device.queue.copyExternalImageToTexture(
+                    { source: fontAtlasBitmap },
                     { texture: textures[texture_id] },
-                    atlas.pixels,
-                    { bytesPerRow: atlas.width * 4 },
-                    [atlas.width, atlas.height]
+                    [width, height]
                 );
-                generateMipmapsFromCanvas(textures[texture_id], atlas.canvas, atlas.width, atlas.height);
                 return;
             }
             const data = new Uint8Array(wasmMemory.buffer, data_ptr, size);
@@ -462,34 +329,34 @@ function hexToRgb(hex) {
 function updatePropertiesPanel() {
     const selectedIdx = wasmInstance.exports.get_selected_node_idx();
     const panel = document.getElementById('properties-panel');
-    
+
     if (selectedIdx === -1) {
         panel.style.display = 'none';
         lastSelectedIdx = -1;
         return;
     }
-    
+
     panel.style.display = 'block';
-    
+
     // Query parameters from WASM
     const w = wasmInstance.exports.get_node_width(selectedIdx);
     const h = wasmInstance.exports.get_node_height(selectedIdx);
     const type = wasmInstance.exports.get_node_type(selectedIdx);
     const wasmFontSize = wasmInstance.exports.get_node_font_size(selectedIdx);
-    
+
     const bgR = wasmInstance.exports.get_node_bg_r(selectedIdx);
     const bgG = wasmInstance.exports.get_node_bg_g(selectedIdx);
     const bgB = wasmInstance.exports.get_node_bg_b(selectedIdx);
     const bgA = wasmInstance.exports.get_node_bg_a(selectedIdx);
-    
+
     const borderR = wasmInstance.exports.get_node_border_r(selectedIdx);
     const borderG = wasmInstance.exports.get_node_border_g(selectedIdx);
     const borderB = wasmInstance.exports.get_node_border_b(selectedIdx);
     const borderA = wasmInstance.exports.get_node_border_a(selectedIdx);
-    
+
     if (!isUpdatingControls) {
         isUpdatingControls = true;
-        
+
         const sizeGroup = document.getElementById('size-group');
         const borderGroup = document.getElementById('border-group');
         const bgColorLabel = document.getElementById('bg-color-label');
@@ -518,101 +385,125 @@ function updatePropertiesPanel() {
                 document.getElementById('prop-h').value = Math.round(h);
             }
             bgColorLabel.innerText = "Background";
-            
+
             if (type === 3 || type === 4) {
                 borderGroup.style.display = 'none';
             } else {
                 borderGroup.style.display = 'block';
             }
         }
-        
+
         const hexBg = rgbToHex(bgR, bgG, bgB);
         document.getElementById('prop-bg-color').value = hexBg;
         document.getElementById('prop-bg-transparent').checked = (bgA <= 0.001);
         document.getElementById('prop-bg-color').disabled = (bgA <= 0.001);
-        
+
         const hexBorder = rgbToHex(borderR, borderG, borderB);
         document.getElementById('prop-border-color').value = hexBorder;
         document.getElementById('prop-border-transparent').checked = (borderA <= 0.001);
         document.getElementById('prop-border-color').disabled = (borderA <= 0.001);
-        
+
+        // Retrieve and set font color
+        const textR = wasmInstance.exports.get_node_text_r(selectedIdx);
+        const textG = wasmInstance.exports.get_node_text_g(selectedIdx);
+        const textB = wasmInstance.exports.get_node_text_b(selectedIdx);
+        document.getElementById('prop-font-color').value = rgbToHex(textR, textG, textB);
+
+        if (type <= 3) {
+            document.getElementById('font-color-group').style.display = 'block';
+        } else {
+            document.getElementById('font-color-group').style.display = 'none';
+        }
+
         isUpdatingControls = false;
     }
-    
+
     lastSelectedIdx = selectedIdx;
 }
 
 function bindPropertiesPanelEvents() {
     const getSelected = () => wasmInstance.exports.get_selected_node_idx();
-    
+
     const updateSize = () => {
         const idx = getSelected();
         if (idx === -1) return;
         const w = parseFloat(document.getElementById('prop-w').value) || 40;
         const h = parseFloat(document.getElementById('prop-h').value) || 20;
         wasmInstance.exports.set_node_size(idx, w, h);
+        updateEditorStyle();
     };
-    
+
     document.getElementById('prop-w').addEventListener('input', updateSize);
     document.getElementById('prop-h').addEventListener('input', updateSize);
-    
+
     document.getElementById('prop-font-size').addEventListener('input', () => {
         const idx = getSelected();
         if (idx === -1) return;
         const size = parseFloat(document.getElementById('prop-font-size').value) || 18;
         wasmInstance.exports.set_node_font_size(idx, size);
+        updateEditorStyle();
     });
-    
+
+    document.getElementById('prop-font-color').addEventListener('input', () => {
+        const idx = getSelected();
+        if (idx === -1) return;
+        const hex = document.getElementById('prop-font-color').value;
+        const rgb = hexToRgb(hex);
+        wasmInstance.exports.set_node_text_color(idx, rgb.r, rgb.g, rgb.b);
+        updateEditorStyle();
+    });
+
     const updateBg = () => {
         const idx = getSelected();
         if (idx === -1) return;
-        
+
         const isTransparent = document.getElementById('prop-bg-transparent').checked;
         document.getElementById('prop-bg-color').disabled = isTransparent;
-        
+
         const hex = document.getElementById('prop-bg-color').value;
         const rgb = hexToRgb(hex);
         const type = wasmInstance.exports.get_node_type(idx);
         const a = isTransparent ? 0.0 : ((type === 5 || type === 6) ? 1.0 : 0.9);
-        
+
         wasmInstance.exports.set_node_bg_color(idx, rgb.r, rgb.g, rgb.b, a);
+        updateEditorStyle();
     };
-    
+
     document.getElementById('prop-bg-color').addEventListener('input', updateBg);
     document.getElementById('prop-bg-transparent').addEventListener('change', updateBg);
-    
+
     const updateBorder = () => {
         const idx = getSelected();
         if (idx === -1) return;
-        
+
         const isNone = document.getElementById('prop-border-transparent').checked;
         document.getElementById('prop-border-color').disabled = isNone;
-        
+
         const hex = document.getElementById('prop-border-color').value;
         const rgb = hexToRgb(hex);
         const a = isNone ? 0.0 : 1.0;
-        
+
         wasmInstance.exports.set_node_border_color(idx, rgb.r, rgb.g, rgb.b, a);
     };
-    
+
     document.getElementById('prop-border-color').addEventListener('input', updateBorder);
     document.getElementById('prop-border-transparent').addEventListener('change', updateBorder);
-    
+
     document.getElementById('btn-z-front').addEventListener('click', () => {
         const idx = getSelected();
         if (idx !== -1) wasmInstance.exports.bring_to_front_wasm(idx);
     });
-    
+
     document.getElementById('btn-z-back').addEventListener('click', () => {
         const idx = getSelected();
         if (idx !== -1) wasmInstance.exports.send_to_back_wasm(idx);
     });
-    
+
     document.getElementById('btn-z-forward').addEventListener('click', () => {
         const idx = getSelected();
         if (idx !== -1) wasmInstance.exports.move_forward_wasm(idx);
     });
-    
+
     document.getElementById('btn-z-backward').addEventListener('click', () => {
         const idx = getSelected();
         if (idx !== -1) wasmInstance.exports.move_backward_wasm(idx);
@@ -637,10 +528,16 @@ function updateMsaaTexture() {
 // Load the WASM binary and WebGPU shader code
 async function start() {
     try {
-        const [wasmResponse, wgslResponse, mipmapWgslResponse] = await Promise.all([
+        const [wasmResponse, wgslResponse, mipmapWgslResponse, fontAtlasImage] = await Promise.all([
             fetch('canvas.wasm'),
             fetch('shader.wgsl'),
-            fetch('mipmap.wgsl')
+            fetch('mipmap.wgsl'),
+            new Promise((resolve, reject) => {
+                const img = new Image();
+                img.onload = () => resolve(img);
+                img.onerror = (e) => reject(new Error("Failed to load font_atlas.png"));
+                img.src = 'font_atlas.png';
+            })
         ]);
 
         if (!wasmResponse.ok) {
@@ -656,6 +553,7 @@ async function start() {
         wgslCode = await wgslResponse.text();
         mipmapWgslCode = await mipmapWgslResponse.text();
         const binary = await wasmResponse.arrayBuffer();
+        fontAtlasBitmap = await createImageBitmap(fontAtlasImage, { colorSpaceConversion: 'none' });
 
         // Initialize WebGPU asynchronously first!
         const canvas = document.getElementById('canvas');
@@ -784,8 +682,18 @@ async function start() {
         // Inject shared memory into import environment
         importObject.env.memory = memory;
 
-        // Ensure the browser has fully downloaded/loaded the web font Outfit
-        await document.fonts.ready;
+        // Ensure the browser has fully downloaded/loaded the web font Outfit.
+        // We trigger download in the background and use Promise.race with a fast 200ms timeout
+        // to avoid locking/freezing the initialization block.
+        try {
+            document.fonts.load('500 12px Outfit').catch(e => console.error("Error background loading Outfit:", e));
+            await Promise.race([
+                document.fonts.ready,
+                new Promise(resolve => setTimeout(resolve, 200))
+            ]);
+        } catch (e) {
+            console.error("Error loading Outfit font:", e);
+        }
 
         const { instance } = await WebAssembly.instantiate(binary, importObject);
         wasmInstance = instance;
@@ -808,6 +716,7 @@ async function start() {
         function step(timestamp) {
             instance.exports.tick_app(timestamp);
             updatePropertiesPanel();
+            updateEditorStyle();
             requestAnimationFrame(step);
         }
         requestAnimationFrame(step);
@@ -897,7 +806,7 @@ function setupInputHandlers() {
             e.preventDefault();
         }
         commitText();
-        
+
         if (isDrawMode && e.button === 0) {
             isDrawingStroke = true;
             const wCoords = getWorldCoords(e.clientX, e.clientY);
@@ -907,13 +816,13 @@ function setupInputHandlers() {
             e.preventDefault();
             return;
         }
-        
+
         const coords = getCanvasCoords(e);
         const forceShift = isArrowMode ? 1 : (e.shiftKey ? 1 : 0);
         const beforeCount = wasmInstance.exports.get_node_count();
-        
-        wasmInstance.exports.on_mouse_down(e.button, coords.x, coords.y, forceShift, e.ctrlKey ? 1 : 0);
-        
+
+        wasmInstance.exports.on_mouse_down(e.button, coords.x, coords.y, forceShift, (e.ctrlKey || e.metaKey) ? 1 : 0);
+
         const afterCount = wasmInstance.exports.get_node_count();
         if (isArrowMode && afterCount > beforeCount) {
             toggleArrowMode(false);
@@ -983,6 +892,13 @@ function setupInputHandlers() {
         }
     });
 
+    document.getElementById('btn-bulk-create').addEventListener('click', () => {
+        commitText();
+        if (confirm("Create 100,000 infographics? This will reset the board.")) {
+            wasmInstance.exports.create_100k_infographics();
+        }
+    });
+
     document.getElementById('btn-add-sticky').addEventListener('click', () => {
         commitText();
         const center = getScreenCenterInWorld();
@@ -1016,7 +932,7 @@ function setupInputHandlers() {
     imageLoader.addEventListener('change', (e) => {
         const file = e.target.files[0];
         if (!file) return;
-        
+
         const reader = new FileReader();
         reader.onload = (event) => {
             const img = new Image();
@@ -1027,7 +943,7 @@ function setupInputHandlers() {
                 const tempCtx = tempCanvas.getContext('2d');
                 tempCtx.drawImage(img, 0, 0);
                 const imgData = tempCtx.getImageData(0, 0, img.width, img.height);
-                
+
                 const imgMips = numMipLevels(img.width, img.height);
                 const texture = device.createTexture({
                     size: [img.width, img.height],
@@ -1035,7 +951,7 @@ function setupInputHandlers() {
                     mipLevelCount: imgMips,
                     usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT
                 });
-                
+
                 device.queue.writeTexture(
                     { texture: texture },
                     imgData.data,
@@ -1043,10 +959,10 @@ function setupInputHandlers() {
                     [img.width, img.height]
                 );
                 generateMipmaps(texture, img.width, img.height);
-                
+
                 const textureId = textures.length;
                 textures.push(texture);
-                
+
                 const center = getScreenCenterInWorld();
                 wasmInstance.exports.add_widget_wasm(4, center.x, center.y, textureId, img.width, img.height);
                 imageLoader.value = '';

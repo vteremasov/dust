@@ -19,7 +19,7 @@ typedef struct {
   WidgetType type;
   float x, y;
   float w, h;
-  char text[256];
+  char text[128];
   float r, g, b;
   int selected;
   int is_dragging;

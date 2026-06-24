@@ -5,12 +5,13 @@ void push_vertex(float x, float y, float u, float v, float r, float g, float b, 
 void push_index(unsigned int idx);
 void draw_rect(float x, float y, float w, float h, float r, float g, float b, float a);
 void draw_line(float x1, float y1, float x2, float y2, float thickness, float r, float g, float b, float a);
-void draw_char(char c, float x, float y, float w, float h, float r, float g, float b, float a);
+void draw_char(uint32_t codepoint, float x, float y, float w, float h, float r, float g, float b, float a);
 int strlen(const char *str);
 void flush_batch(int pipeline_id, int bind_texture_id);
+uint32_t decode_utf8(const char **str);
 
-#define SOLID_U 0.09375f
-#define SOLID_V 0.03125f
+#define SOLID_U 0.046875f
+#define SOLID_V 0.015625f
 
 // Math helpers
 static float float_cos(float val) { return __builtin_cosf(val); }
@@ -95,10 +96,15 @@ void draw_image_rect(float x, float y, float w, float h, float alpha) {
   push_index(start_idx + 3);
 }
 
+float get_char_advance(uint32_t codepoint);
+
 void draw_widget_text_content(Node *n, float tx_offset_y, float char_w, float char_h, float tr, float tg, float tb, float ta) {
   int len = strlen(n->text);
   if (len <= 0) return;
 
+  // Since the characters in the 64x64 cell are generated at 38px,
+  // we scale the rendered quad to n->font_size * (64/38) to render them at the true logical font size.
+  float cell_size = char_w * (64.0f / 38.0f);
   float line_spacing = char_h * 0.2f;
 
   int line_starts[32];
@@ -131,17 +137,34 @@ void draw_widget_text_content(Node *n, float tx_offset_y, float char_w, float ch
   for (int l = 0; l < num_lines; l++) {
     int l_start = line_starts[l];
     int l_len = line_lens[l];
-    float total_w = l_len * char_w * 0.55f;
+    
+    // Calculate total proportional width of this line
+    float total_w = 0.0f;
+    const char *ptr = n->text + l_start;
+    const char *line_end = ptr + l_len;
+    while (ptr < line_end) {
+      uint32_t cp = decode_utf8(&ptr);
+      if (cp != '\r') {
+        total_w += get_char_advance(cp) * char_w;
+      }
+    }
+    
     float tx = n->x + (n->w - total_w) / 2.0f;
     float ty = start_ty + l * (char_h + line_spacing);
 
-    // Draw each character in the range
+    // Draw each character in the range using proportional offset
     float cur_x = tx;
-    for (int ch_idx = 0; ch_idx < l_len; ch_idx++) {
-      char ch = n->text[l_start + ch_idx];
-      if (ch != '\r') {
-        draw_char(ch, cur_x, ty, char_w, char_h, tr, tg, tb, ta);
-        cur_x += char_w * 0.55f;
+    ptr = n->text + l_start;
+    while (ptr < line_end) {
+      uint32_t cp = decode_utf8(&ptr);
+      if (cp != '\r') {
+        float advance = get_char_advance(cp) * char_w;
+        // Position quad so glyph origin (at cell x=24) aligns with cur_x,
+        // and glyph baseline (at cell y=46) aligns with the baseline (75% of char_h)
+        float x_pos = cur_x - cell_size * (24.0f / 64.0f);
+        float y_pos = ty - cell_size * (46.0f / 64.0f) + char_h * 0.75f;
+        draw_char(cp, x_pos, y_pos, cell_size, cell_size, tr, tg, tb, ta);
+        cur_x += advance;
       }
     }
   }
@@ -298,12 +321,19 @@ void draw_node_widget(Node *n, int is_editing, int default_texture_id) {
     }
   }
 
-  // 3. Draw Text Content
+  // 3. Draw Text Content using MSDF characters directly in pipeline 0
   if (!is_editing && n->type != WIDGET_IMAGE && n->type != WIDGET_PATH && n->type != WIDGET_ARROW) {
-    if (n->texture_id != -1) {
-      flush_batch(0, default_texture_id);
-      draw_image_rect(n->x, n->y, n->w, n->h, 1.0f);
-      flush_batch(1, n->texture_id);
+    float tr = n->r;
+    float tg = n->g;
+    float tb = n->b;
+    if (n->type == WIDGET_TEXT) {
+      tr = n->bg_r;
+      tg = n->bg_g;
+      tb = n->bg_b;
     }
+    float char_h = n->font_size;
+    float char_w = n->font_size;
+    
+    draw_widget_text_content(n, 0.0f, char_w, char_h, tr, tg, tb, 1.0f);
   }
 }
