@@ -819,6 +819,21 @@ async function start() {
 function setupInputHandlers() {
     const canvas = document.getElementById('canvas');
 
+    // Prevent all default touch behaviors on the document to stop
+    // browser gesture interception (pull-to-refresh, back swipe, etc.)
+    document.addEventListener('touchmove', (e) => {
+        if (e.target === canvas || e.target.closest('#bottom-ui-container')) {
+            e.preventDefault();
+        }
+    }, { passive: false });
+
+    // Prevent double-tap-to-zoom on the canvas
+    document.addEventListener('touchstart', (e) => {
+        if (e.target === canvas) {
+            e.preventDefault();
+        }
+    }, { passive: false });
+
     let isDrawMode = false;
     let isDrawingStroke = false;
     let isArrowMode = false;

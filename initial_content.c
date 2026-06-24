@@ -366,8 +366,8 @@ void generate_initial_content() {
 void generate_100k_infographics() {
   ecs_init();
 
-  int cols = 20;
-  int rows = 20;
+  int cols = 50;
+  int rows = 50;
 
   for (int row = 0; row < rows; row++) {
     for (int col = 0; col < cols; col++) {

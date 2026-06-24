@@ -172,8 +172,8 @@ typedef struct {
   float r, g, b, a;
 } Vertex;
 
-#define MAX_VERTICES 30000
-#define MAX_INDICES 45000
+#define MAX_VERTICES 440000
+#define MAX_INDICES 660000
 
 Vertex vertex_buffer[MAX_VERTICES];
 uint32_t index_buffer[MAX_INDICES];
@@ -697,8 +697,8 @@ __attribute__((visibility("default"))) void on_mouse_move(float x, float y) {
           scale = (scale_w + scale_h) / 2.0f;
         }
 
-        float min_scale_w = 40.0f / resize_initial_w;
-        float min_scale_h = (rn->type == WIDGET_STICKY) ? (40.0f / resize_initial_h) : (20.0f / resize_initial_h);
+        float min_scale_w = 2.0f / resize_initial_w;
+        float min_scale_h = 2.0f / resize_initial_h;
         float min_scale = (min_scale_w > min_scale_h) ? min_scale_w : min_scale_h;
         if (scale < min_scale) {
           scale = min_scale;
@@ -708,10 +708,10 @@ __attribute__((visibility("default"))) void on_mouse_move(float x, float y) {
         new_h = resize_initial_h * scale;
       }
     } else {
-      if (new_w < 40.0f)
-        new_w = 40.0f;
-      if (new_h < 20.0f)
-        new_h = 20.0f;
+      if (new_w < 2.0f)
+        new_w = 2.0f;
+      if (new_h < 2.0f)
+        new_h = 2.0f;
     }
 
     // Apply anchors for Left and Top handles
@@ -791,10 +791,10 @@ __attribute__((visibility("default"))) void on_mouse_wheel(float delta_y,
   float old_zoom = uniforms.zoom;
   uniforms.zoom *= factor;
 
-  if (uniforms.zoom < 0.08f)
-    uniforms.zoom = 0.08f;
-  if (uniforms.zoom > 4.0f)
-    uniforms.zoom = 4.0f;
+  if (uniforms.zoom < 0.002f)
+    uniforms.zoom = 0.002f;
+  if (uniforms.zoom > 32.0f)
+    uniforms.zoom = 32.0f;
 
   float wx = (x - uniforms.pan_x) / old_zoom;
   float wy = (y - uniforms.pan_y) / old_zoom;
@@ -1488,7 +1488,7 @@ typedef struct {
   unsigned int index_count;
 } DrawBatch;
 
-#define MAX_BATCHES 500
+#define MAX_BATCHES 5000
 DrawBatch batches[MAX_BATCHES];
 int batch_count = 0;
 unsigned int last_batch_index_start = 0;
@@ -1502,39 +1502,11 @@ __attribute__((visibility("default"))) void tick_app(float timestamp) {
   batch_count = 0;
   last_batch_index_start = 0;
 
-  // 1. Compile Infinite Grid lines
+  // 1. Calculate screen coordinates in world space
   float left = -uniforms.pan_x / uniforms.zoom;
   float right = (uniforms.screen_width - uniforms.pan_x) / uniforms.zoom;
   float top = -uniforms.pan_y / uniforms.zoom;
   float bottom = (uniforms.screen_height - uniforms.pan_y) / uniforms.zoom;
-
-  float grid_size = 100.0f;
-  if (uniforms.zoom < 0.25f)
-    grid_size = 400.0f;
-  if (uniforms.zoom < 0.08f)
-    grid_size = 1600.0f;
-
-  float start_x = ((int)(left / grid_size) - 1) * grid_size;
-  float end_x = ((int)(right / grid_size) + 1) * grid_size;
-  float start_y = ((int)(top / grid_size) - 1) * grid_size;
-  float end_y = ((int)(bottom / grid_size) + 1) * grid_size;
-
-  float grid_r = 35.0f / 255.0f;
-  float grid_g = 39.0f / 255.0f;
-  float grid_b = 49.0f / 255.0f;
-  float grid_a = 0.5f;
-
-  // Vertical grid lines
-  for (float x = start_x; x <= end_x; x += grid_size) {
-    draw_line(x, top, x, bottom, 1.2f / uniforms.zoom, grid_r, grid_g, grid_b,
-              grid_a);
-  }
-
-  // Horizontal grid lines
-  for (float y = start_y; y <= end_y; y += grid_size) {
-    draw_line(left, y, right, y, 1.2f / uniforms.zoom, grid_r, grid_g, grid_b,
-              grid_a);
-  }
 
   // 3. Compile Connection Draft (if Shift is held down or arrow tool active)
   if (selected_node_idx != -1 && (shift_pressed || arrow_tool_active) &&

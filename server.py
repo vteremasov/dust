@@ -23,7 +23,7 @@ MyHTTPRequestHandler.extensions_map.update({
 print(f"Starting server on http://localhost:{PORT}")
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 socketserver.ThreadingTCPServer.allow_reuse_address = True
-with socketserver.ThreadingTCPServer(("", PORT), MyHTTPRequestHandler) as httpd:
+with socketserver.ThreadingTCPServer(("0.0.0.0", PORT), MyHTTPRequestHandler) as httpd:
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

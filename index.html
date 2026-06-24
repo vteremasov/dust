@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Infinity Canvas - WebGPU & Pure C</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -32,13 +32,16 @@
             padding: 0;
         }
 
-        body {
+        html, body {
+            overflow: hidden;
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            touch-action: none;
             background-color: var(--bg-color);
             color: var(--text-color);
             font-family: 'Outfit', sans-serif;
-            overflow: hidden;
-            width: 100vw;
-            height: 100vh;
         }
 
         canvas {
@@ -49,6 +52,7 @@
             top: 0;
             left: 0;
             z-index: 1;
+            touch-action: none;
         }
 
         /* Glassmorphic overlay panels */
@@ -72,12 +76,28 @@
                         0 0 15px var(--accent-glow);
         }
 
-
-
-        #toolbar {
+        #bottom-ui-container {
+            position: absolute;
             bottom: 20px;
             left: 50%;
             transform: translateX(-50%);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+            z-index: 10;
+            pointer-events: none;
+            width: auto;
+            max-width: 95vw;
+        }
+
+        #bottom-ui-container > * {
+            pointer-events: auto;
+            position: static !important;
+            transform: none !important;
+        }
+
+        #toolbar {
             display: flex;
             flex-direction: row;
             gap: 8px;
@@ -322,9 +342,6 @@
         }
 
         #properties-panel {
-            bottom: 80px;
-            left: 50%;
-            transform: translateX(-50%);
             display: none;
             flex-direction: row;
             gap: 8px;
@@ -381,6 +398,53 @@
             border-radius: 6px;
             box-shadow: none;
         }
+
+        @media (max-width: 650px) {
+            #bottom-ui-container {
+                bottom: 10px;
+                width: 95vw;
+                max-width: 480px;
+                gap: 8px;
+            }
+
+            #toolbar, #properties-panel {
+                width: 100% !important;
+                flex-wrap: wrap;
+                justify-content: center;
+                gap: 6px !important;
+                padding: 10px 8px !important;
+                border-radius: 12px;
+            }
+
+            #toolbar .btn, #properties-panel .btn-widget {
+                width: 38px !important;
+                height: 38px !important;
+                border-radius: 6px;
+            }
+
+            #toolbar .color-picker {
+                width: 38px !important;
+                height: 38px !important;
+            }
+
+            #properties-panel {
+                padding: 8px !important;
+            }
+
+            #properties-panel .toolbar-divider {
+                display: none;
+            }
+
+            #info-panel {
+                bottom: auto !important;
+                top: 10px !important;
+                right: 10px !important;
+                left: auto !important;
+                padding: 6px 12px !important;
+                font-size: 0.75rem !important;
+                border-radius: 8px;
+            }
+        }
     </style>
 </head>
 <body>
@@ -397,6 +461,9 @@
     <textarea id="text-editor" maxlength="120"></textarea>
 
 
+
+    <!-- Bottom UI Container for toolbar + properties -->
+    <div id="bottom-ui-container">
 
     <!-- Glassmorphic Toolbar -->
     <div id="toolbar" class="glass-panel">
@@ -537,6 +604,8 @@
             </button>
         </div>
     </div>
+
+    </div> <!-- end #bottom-ui-container -->
 
     <!-- Display Stats -->
     <div id="info-panel" class="glass-panel">

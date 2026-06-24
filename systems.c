@@ -238,42 +238,7 @@ static void draw_entity(Entity e, int is_editing, int default_texture_id) {
   TransformComponent *t = &transform_components[e];
   InteractionComponent *inter = ecs_has_component(e, COMP_INTERACTION) ? &interaction_components[e] : NULL;
 
-  float border = 4.0f;
-  
-  // 1. Draw Selection Outline
-  if (inter && inter->selected) {
-    if (r->type == WIDGET_OVAL) {
-      draw_oval(t->x + t->w/2.0f, t->y + t->h/2.0f, t->w/2.0f + border, t->h/2.0f + border, 94.0f / 255.0f, 106.0f / 255.0f, 210.0f / 255.0f, 0.35f);
-    } else if (r->type != WIDGET_TEXT) {
-      draw_rect(t->x - border, t->y - border, t->w + border * 2.0f, t->h + border * 2.0f, 94.0f / 255.0f, 106.0f / 255.0f, 210.0f / 255.0f, 0.35f);
-    } else {
-      draw_rect(t->x - border, t->y - border, t->w + border * 2.0f, t->h + border * 2.0f, 94.0f / 255.0f, 106.0f / 255.0f, 210.0f / 255.0f, 0.15f);
-    }
 
-    // Draw Resize Handles (4 corners + 4 edge midpoints)
-    if (r->type != WIDGET_PATH) {
-      float hs = 7.0f / uniforms.zoom;
-      if (hs < 4.0f) hs = 4.0f;
-      if (hs > 16.0f) hs = 16.0f;
-      float radius = hs / 2.0f;
-
-      float x_coords[8] = {
-        t->x, t->x + t->w, t->x, t->x + t->w,             // Corners
-        t->x + t->w / 2.0f, t->x + t->w / 2.0f,          // Top & Bottom middles
-        t->x, t->x + t->w                                // Left & Right middles
-      };
-      float y_coords[8] = {
-        t->y, t->y, t->y + t->h, t->y + t->h,             // Corners
-        t->y, t->y + t->h,                               // Top & Bottom middles
-        t->y + t->h / 2.0f, t->y + t->h / 2.0f           // Left & Right middles
-      };
-
-      for (int i = 0; i < 8; i++) {
-        draw_filled_circle(x_coords[i], y_coords[i], radius + 1.0f, 94.0f / 255.0f, 106.0f / 255.0f, 210.0f / 255.0f, 1.0f);
-        draw_filled_circle(x_coords[i], y_coords[i], radius, 1.0f, 1.0f, 1.0f, 1.0f);
-      }
-    }
-  }
 
   // 2. Draw Widget Body
   if (r->type == WIDGET_STICKY) {
@@ -434,7 +399,68 @@ static void draw_connection_arrow(Entity e, int editing_node_idx) {
 }
 
 // ECS Systems
+static void draw_selection_outline_and_handles(Entity e) {
+  if (!ecs_has_component(e, COMP_RENDER) || !ecs_has_component(e, COMP_TRANSFORM)) return;
+  RenderComponent *r = &render_components[e];
+  TransformComponent *t = &transform_components[e];
+
+  float pr = 94.0f / 255.0f;
+  float pg = 106.0f / 255.0f;
+  float pb = 210.0f / 255.0f;
+  float alpha = (r->type == WIDGET_TEXT) ? 0.6f : 1.0f;
+
+  // 1. Draw Selection Contour
+  if (r->type == WIDGET_OVAL) {
+    draw_oval_border(t->x + t->w/2.0f, t->y + t->h/2.0f, t->w/2.0f, t->h/2.0f, 1.5f, pr, pg, pb, alpha);
+  } else {
+    float x1 = t->x;
+    float y1 = t->y;
+    float x2 = t->x + t->w;
+    float y2 = t->y + t->h;
+
+    draw_line(x1, y1, x2, y1, 1.5f, pr, pg, pb, alpha);
+    draw_line(x2, y1, x2, y2, 1.5f, pr, pg, pb, alpha);
+    draw_line(x2, y2, x1, y2, 1.5f, pr, pg, pb, alpha);
+    draw_line(x1, y2, x1, y1, 1.5f, pr, pg, pb, alpha);
+
+    // Smooth corners for clean contour rectangle
+    draw_filled_circle(x1, y1, 0.75f, pr, pg, pb, alpha);
+    draw_filled_circle(x2, y1, 0.75f, pr, pg, pb, alpha);
+    draw_filled_circle(x2, y2, 0.75f, pr, pg, pb, alpha);
+    draw_filled_circle(x1, y2, 0.75f, pr, pg, pb, alpha);
+  }
+
+  // 2. Draw Resize Handles (only for non-path widgets)
+  if (r->type != WIDGET_PATH) {
+    float hs = 6.0f / uniforms.zoom;
+    if (hs < 3.5f) hs = 3.5f;
+    if (hs > 10.0f) hs = 10.0f;
+
+    float x_coords[8] = {
+      t->x, t->x + t->w, t->x, t->x + t->w,             // Corners
+      t->x + t->w / 2.0f, t->x + t->w / 2.0f,          // Top & Bottom middles
+      t->x, t->x + t->w                                // Left & Right middles
+    };
+    float y_coords[8] = {
+      t->y, t->y, t->y + t->h, t->y + t->h,             // Corners
+      t->y, t->y + t->h,                               // Top & Bottom middles
+      t->y + t->h / 2.0f, t->y + t->h / 2.0f           // Left & Right middle
+    };
+
+    float inner_size = hs - 2.0f;
+    if (inner_size < 1.0f) inner_size = 1.0f;
+
+    for (int i = 0; i < 8; i++) {
+      // Draw purple border square
+      draw_rect(x_coords[i] - hs / 2.0f, y_coords[i] - hs / 2.0f, hs, hs, pr, pg, pb, 1.0f);
+      // Draw inner white square
+      draw_rect(x_coords[i] - inner_size / 2.0f, y_coords[i] - inner_size / 2.0f, inner_size, inner_size, 1.0f, 1.0f, 1.0f, 1.0f);
+    }
+  }
+}
+
 void render_system(float left, float right, float top, float bottom, int editing_node_idx, int texture_id) {
+  // Pass 1: Render all widget bodies and arrows
   for (unsigned int i = 0; i < entity_count; i++) {
     if (!ecs_has_component(i, COMP_RENDER)) continue;
 
@@ -479,6 +505,25 @@ void render_system(float left, float right, float top, float bottom, int editing
       draw_connection_arrow(i, editing_node_idx);
     } else {
       draw_entity(i, (int)i == editing_node_idx, texture_id);
+    }
+  }
+
+  // Pass 2: Render selection contours and handles on top of everything
+  for (unsigned int i = 0; i < entity_count; i++) {
+    if (!ecs_has_component(i, COMP_RENDER) || !ecs_has_component(i, COMP_TRANSFORM)) continue;
+
+    RenderComponent *r = &render_components[i];
+    if (r->type == WIDGET_ARROW) continue;
+
+    // Culling system check for contour/handles
+    TransformComponent *t = &transform_components[i];
+    if (t->x + t->w < left || t->x > right || t->y + t->h < top || t->y > bottom) {
+      continue;
+    }
+
+    InteractionComponent *inter = ecs_has_component(i, COMP_INTERACTION) ? &interaction_components[i] : NULL;
+    if (inter && inter->selected) {
+      draw_selection_outline_and_handles(i);
     }
   }
 }
