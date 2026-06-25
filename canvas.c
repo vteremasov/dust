@@ -619,7 +619,7 @@ on_mouse_down(int button, float x, float y, int shift, int ctrl) {
     if (is_double_click) {
       add_widget_wasm(WIDGET_STICKY, world_x, world_y, -1, 0, 0);
     } else {
-      if (button == 2 || space_pressed || button == 1) {
+      if (button == 2 || space_pressed || button == 1 || button == 4) {
         is_panning = 1;
       } else {
         selected_node_idx = -1;

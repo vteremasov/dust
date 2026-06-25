@@ -1086,7 +1086,7 @@ function setupInputHandlers() {
                 wasmInstance.exports.start_stroke(wCoords.x, wCoords.y, rgb.r, rgb.g, rgb.b);
             } else {
                 const forceShift = isArrowMode ? 1 : 0;
-                wasmInstance.exports.on_mouse_down(0, coords.x, coords.y, forceShift, 0);
+                wasmInstance.exports.on_mouse_down(4, coords.x, coords.y, forceShift, 0);
             }
         } else if (e.touches.length === 2) {
             isTwoFingerTouch = true;
