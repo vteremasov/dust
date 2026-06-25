@@ -1471,6 +1471,12 @@ start_stroke(float world_x, float world_y, float r, float g, float b) {
   path_components[e].path_start_idx = path_point_count;
   path_components[e].path_point_len = 0;
 
+  ecs_add_component(e, COMP_TRANSFORM);
+  transform_components[e].x = 0.0f;
+  transform_components[e].y = 0.0f;
+  transform_components[e].w = 0.0f;
+  transform_components[e].h = 0.0f;
+
   ecs_add_component(e, COMP_INTERACTION);
   interaction_components[e].selected = 0;
   interaction_components[e].is_dragging = 0;

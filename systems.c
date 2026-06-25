@@ -16,6 +16,7 @@ typedef struct {
 
 extern Uniforms uniforms;
 extern int vertex_count;
+extern int active_stroke_node_idx;
 
 extern void push_vertex(float x, float y, float u, float v, float r, float g, float b, float a);
 extern void push_index(unsigned int idx);
@@ -492,14 +493,16 @@ void render_system(float left, float right, float top, float bottom, int editing
       }
     } else {
       if (ecs_has_component(i, COMP_TRANSFORM)) {
-        TransformComponent *t = &transform_components[i];
-        float margin = 20.0f;
-        if (t->x + t->w + margin < left || t->x - margin > right ||
-            t->y + t->h + margin < top || t->y - margin > bottom) {
-          continue;
-        }
-        if (t->w * uniforms.zoom < 0.5f && t->h * uniforms.zoom < 0.5f) {
-          continue;
+        if ((int)i != active_stroke_node_idx) {
+          TransformComponent *t = &transform_components[i];
+          float margin = 20.0f;
+          if (t->x + t->w + margin < left || t->x - margin > right ||
+              t->y + t->h + margin < top || t->y - margin > bottom) {
+            continue;
+          }
+          if (t->w * uniforms.zoom < 0.5f && t->h * uniforms.zoom < 0.5f) {
+            continue;
+          }
         }
       }
     }
