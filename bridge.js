@@ -28,6 +28,12 @@ let currentZoom = 1.0;
 let currentPanX = 0.0;
 let currentPanY = 0.0;
 
+let isDebugExpanded = false;
+let frameCountForFps = 0;
+let currentFps = 60;
+let lastFpsUpdateTime = performance.now();
+let lastDebugPanelUpdateTime = 0;
+
 function numMipLevels(width, height) {
     return 1 + Math.floor(Math.log2(Math.max(width, height)));
 }
@@ -801,10 +807,25 @@ async function start() {
         setTimeout(() => { document.getElementById('loader').style.display = 'none'; }, 500);
 
         // Start Render Loop
+        // Start Render Loop
         function step(timestamp) {
+            frameCountForFps++;
+            const now = performance.now();
+            if (now - lastFpsUpdateTime >= 500) {
+                currentFps = Math.round((frameCountForFps * 1000) / (now - lastFpsUpdateTime));
+                frameCountForFps = 0;
+                lastFpsUpdateTime = now;
+            }
+
             instance.exports.tick_app(timestamp);
             updatePropertiesPanel();
             updateEditorStyle();
+
+            if (isDebugExpanded && now - lastDebugPanelUpdateTime >= 200) {
+                updateDebugStatsPanel();
+                lastDebugPanelUpdateTime = now;
+            }
+
             requestAnimationFrame(step);
         }
         requestAnimationFrame(step);
@@ -814,6 +835,65 @@ async function start() {
         document.getElementById('loader').style.display = 'block';
         document.getElementById('error-msg').innerText = err.message;
     }
+}
+
+function updateDebugStatsPanel() {
+    if (!wasmInstance) return;
+
+    const ptr = wasmInstance.exports.get_widget_type_counts();
+    const counts = new Int32Array(wasmMemory.buffer, ptr, 8);
+
+    const stickyCount = counts[0];
+    const rectCount = counts[1];
+    const ovalCount = counts[2];
+    const textCount = counts[3];
+    const imageCount = counts[4];
+    const pathCount = counts[5];
+    const arrowCount = counts[6];
+    const triangleCount = counts[7];
+
+    const batchCount = wasmInstance.exports.get_debug_batch_count();
+    const vertexCount = wasmInstance.exports.get_debug_vertex_count();
+    const indexCount = wasmInstance.exports.get_debug_index_count();
+
+    const wasmMemBytes = wasmMemory.buffer.byteLength;
+    const wasmMemMb = (wasmMemBytes / (1024 * 1024)).toFixed(1);
+
+    let jsMemInfo = "";
+    if (performance && performance.memory) {
+        const jsUsedMb = (performance.memory.usedJSHeapSize / (1024 * 1024)).toFixed(1);
+        const jsTotalMb = (performance.memory.totalJSHeapSize / (1024 * 1024)).toFixed(1);
+        jsMemInfo = `<div style="display: flex; justify-content: space-between; margin-bottom: 2px;"><span>JS Heap:</span><span>${jsUsedMb} / ${jsTotalMb} MB</span></div>`;
+    }
+
+    const html = `
+        <div style="display: grid; grid-template-columns: 1fr; gap: 8px; font-family: monospace; line-height: 1.4;">
+            <div style="font-weight: 600; color: #8b94f6; margin-bottom: 2px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 2px;">PERFORMANCE & SYSTEM</div>
+            <div style="display: flex; justify-content: space-between; margin-bottom: 2px;"><span>FPS:</span><span style="color: ${currentFps >= 50 ? '#4ade80' : currentFps >= 30 ? '#fbbf24' : '#f87171'}; font-weight: bold;">${currentFps} FPS</span></div>
+            <div style="display: flex; justify-content: space-between; margin-bottom: 2px;"><span>WASM Memory:</span><span>${wasmMemMb} MB</span></div>
+            ${jsMemInfo}
+            
+            <div style="font-weight: 600; color: #8b94f6; margin-top: 6px; margin-bottom: 2px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 2px;">RENDERER (WEBGPU)</div>
+            <div style="display: flex; justify-content: space-between; margin-bottom: 2px;"><span>Draw Batches:</span><span>${batchCount}</span></div>
+            <div style="display: flex; justify-content: space-between; margin-bottom: 2px;"><span>Vertices:</span><span>${vertexCount.toLocaleString()}</span></div>
+            <div style="display: flex; justify-content: space-between; margin-bottom: 2px;"><span>Indices:</span><span>${indexCount.toLocaleString()}</span></div>
+            <div style="display: flex; justify-content: space-between; margin-bottom: 2px;"><span>Zoom:</span><span>${(currentZoom * 100).toFixed(1)}%</span></div>
+            
+            <div style="font-weight: 600; color: #8b94f6; margin-top: 6px; margin-bottom: 2px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 2px;">OBJECT BREAKDOWN</div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; font-size: 0.7rem;">
+                <div style="display: flex; justify-content: space-between;"><span>Sticky:</span><span>${stickyCount}</span></div>
+                <div style="display: flex; justify-content: space-between;"><span>Rects:</span><span>${rectCount}</span></div>
+                <div style="display: flex; justify-content: space-between;"><span>Ovals:</span><span>${ovalCount}</span></div>
+                <div style="display: flex; justify-content: space-between;"><span>Texts:</span><span>${textCount}</span></div>
+                <div style="display: flex; justify-content: space-between;"><span>Images:</span><span>${imageCount}</span></div>
+                <div style="display: flex; justify-content: space-between;"><span>Paths:</span><span>${pathCount}</span></div>
+                <div style="display: flex; justify-content: space-between;"><span>Arrows:</span><span>${arrowCount}</span></div>
+                <div style="display: flex; justify-content: space-between;"><span>Triangles:</span><span>${triangleCount}</span></div>
+            </div>
+        </div>
+    `;
+
+    document.getElementById('debug-expanded-panel').innerHTML = html;
 }
 
 function setupInputHandlers() {
@@ -833,6 +913,11 @@ function setupInputHandlers() {
             e.preventDefault();
         }
     }, { passive: false });
+
+    // Prevent native page pinch zoom
+    document.addEventListener('gesturestart', (e) => {
+        e.preventDefault();
+    });
 
     let isDrawMode = false;
     let isDrawingStroke = false;
@@ -952,7 +1037,7 @@ function setupInputHandlers() {
         wasmInstance.exports.on_mouse_up(e.button, coords.x, coords.y);
     });
 
-    canvas.addEventListener('wheel', (e) => {
+    window.addEventListener('wheel', (e) => {
         e.preventDefault();
         const coords = getCanvasCoords(e);
         if (e.ctrlKey) {
@@ -968,7 +1053,7 @@ function setupInputHandlers() {
     let lastTouchX = 0;
     let lastTouchY = 0;
     let isTouchDrawing = false;
-    
+
     // Two-finger touch trackers
     let lastTouchDist = 0;
     let lastTouchMidX = 0;
@@ -1133,9 +1218,7 @@ function setupInputHandlers() {
 
     document.getElementById('btn-bulk-create').addEventListener('click', () => {
         commitText();
-        if (confirm("Create 100,000 infographics? This will reset the board.")) {
-            wasmInstance.exports.create_100k_infographics();
-        }
+        wasmInstance.exports.create_100k_infographics();
     });
 
     document.getElementById('btn-add-sticky').addEventListener('click', () => {
@@ -1232,13 +1315,27 @@ function setupInputHandlers() {
     document.getElementById('btn-clear').addEventListener('click', () => {
         console.log("Clear Board button clicked in JS!");
         commitText();
-        if (confirm("Clear all widgets and connections?")) {
-            try {
-                wasmInstance.exports.on_btn_clear_click();
-                console.log("on_btn_clear_click finished calling WASM");
-            } catch (e) {
-                console.error("WASM on_btn_clear_click crashed:", e);
-            }
+        try {
+            wasmInstance.exports.on_btn_clear_click();
+            console.log("on_btn_clear_click finished calling WASM");
+        } catch (e) {
+            console.error("WASM on_btn_clear_click crashed:", e);
+        }
+    });
+
+    const btnToggleDebug = document.getElementById('btn-toggle-debug');
+    const debugExpandedPanel = document.getElementById('debug-expanded-panel');
+    btnToggleDebug.addEventListener('click', () => {
+        isDebugExpanded = !isDebugExpanded;
+        if (isDebugExpanded) {
+            debugExpandedPanel.style.display = 'block';
+            btnToggleDebug.style.background = 'rgba(94, 106, 210, 0.35)';
+            btnToggleDebug.style.borderColor = 'rgba(94, 106, 210, 0.6)';
+            updateDebugStatsPanel();
+        } else {
+            debugExpandedPanel.style.display = 'none';
+            btnToggleDebug.style.background = 'rgba(94, 106, 210, 0.15)';
+            btnToggleDebug.style.borderColor = 'rgba(94, 106, 210, 0.3)';
         }
     });
 }

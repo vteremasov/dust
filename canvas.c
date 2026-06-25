@@ -91,14 +91,16 @@ void log_str(const char *str) { js_console_log(str, strlen(str)); }
 // -------------------------------------------------------------
 // Font Atlas Builder & ECS
 // -------------------------------------------------------------
-#include "font.generated.h"
 #include "ecs.h"
-#include "systems.h"
+#include "font.generated.h"
 #include "initial_content.h"
+#include "systems.h"
 
-void add_widget_wasm(int type, float x, float y, int texture_id, int img_w, int img_h);
+void add_widget_wasm(int type, float x, float y, int texture_id, int img_w,
+                     int img_h);
 void flush_batch(int pipeline_id, int bind_texture_id);
 float get_char_advance(uint32_t codepoint);
+void mark_dirty();
 
 // UV coord for solid block (character index 1 in 64x64 cell layout)
 #define SOLID_U 0.046875f
@@ -147,7 +149,7 @@ uint32_t decode_utf8(const char **str) {
   return codepoint;
 }
 
-const GlyphInfo* lookup_glyph(uint32_t codepoint) {
+const GlyphInfo *lookup_glyph(uint32_t codepoint) {
   int low = 0;
   int high = FONT_GLYPHS_COUNT - 1;
   while (low <= high) {
@@ -172,8 +174,8 @@ typedef struct {
   float r, g, b, a;
 } Vertex;
 
-#define MAX_VERTICES 440000
-#define MAX_INDICES 660000
+#define MAX_VERTICES 8200000
+#define MAX_INDICES 12300000
 
 Vertex vertex_buffer[MAX_VERTICES];
 uint32_t index_buffer[MAX_INDICES];
@@ -241,8 +243,8 @@ void draw_line(float x1, float y1, float x2, float y2, float thickness, float r,
   push_index(start_idx + 3);
 }
 
-void draw_char(uint32_t codepoint, float x, float y, float w, float h, float r, float g,
-               float b, float a) {
+void draw_char(uint32_t codepoint, float x, float y, float w, float h, float r,
+               float g, float b, float a) {
   const GlyphInfo *g_info = lookup_glyph(codepoint);
   uint16_t atlas_index = 0; // Default fallback to empty cell
   if (g_info) {
@@ -275,21 +277,6 @@ void draw_char(uint32_t codepoint, float x, float y, float w, float h, float r, 
   push_index(start_idx + 1);
   push_index(start_idx + 2);
   push_index(start_idx + 3);
-}
-
-void draw_text(const char *text, float x, float y, float char_w, float char_h,
-               float r, float g, float b, float a) {
-  float cell_size = char_w * (64.0f / 38.0f);
-  float cur_x = x;
-  const char *ptr = text;
-  while (*ptr != '\0') {
-    uint32_t cp = decode_utf8(&ptr);
-    float advance = get_char_advance(cp) * char_w;
-    float x_pos = cur_x - cell_size * (24.0f / 64.0f);
-    float y_pos = y - cell_size * (46.0f / 64.0f) + char_h * 0.75f;
-    draw_char(cp, x_pos, y_pos, cell_size, cell_size, r, g, b, a);
-    cur_x += advance;
-  }
 }
 
 // -------------------------------------------------------------
@@ -400,6 +387,7 @@ __attribute__((visibility("default"))) int init_app(int width, int height) {
 __attribute__((visibility("default"))) void on_resize(int width, int height) {
   uniforms.screen_width = (float)width;
   uniforms.screen_height = (float)height;
+  mark_dirty();
 }
 
 void clamp_node_size_with_aspect_idx(int idx, float *w, float *h) {
@@ -431,6 +419,7 @@ void clamp_node_size_with_aspect_idx(int idx, float *w, float *h) {
 
 __attribute__((visibility("default"))) void
 on_mouse_down(int button, float x, float y, int shift, int ctrl) {
+  mark_dirty();
   float world_x = (x - uniforms.pan_x) / uniforms.zoom;
   float world_y = (y - uniforms.pan_y) / uniforms.zoom;
   mouse_world_x = world_x;
@@ -460,29 +449,34 @@ on_mouse_down(int button, float x, float y, int shift, int ctrl) {
     // Check corners first (high priority)
     float dist_tl_x = world_x - x_l;
     float dist_tl_y = world_y - y_t;
-    if (float_sqrt(dist_tl_x * dist_tl_x + dist_tl_y * dist_tl_y) <= click_tolerance) {
+    if (float_sqrt(dist_tl_x * dist_tl_x + dist_tl_y * dist_tl_y) <=
+        click_tolerance) {
       hit_handle = RESIZE_TL;
-    }
-    else if (float_sqrt((world_x - x_r) * (world_x - x_r) + (world_y - y_t) * (world_y - y_t)) <= click_tolerance) {
+    } else if (float_sqrt((world_x - x_r) * (world_x - x_r) +
+                          (world_y - y_t) * (world_y - y_t)) <=
+               click_tolerance) {
       hit_handle = RESIZE_TR;
-    }
-    else if (float_sqrt((world_x - x_l) * (world_x - x_l) + (world_y - y_b) * (world_y - y_b)) <= click_tolerance) {
+    } else if (float_sqrt((world_x - x_l) * (world_x - x_l) +
+                          (world_y - y_b) * (world_y - y_b)) <=
+               click_tolerance) {
       hit_handle = RESIZE_BL;
-    }
-    else if (float_sqrt((world_x - x_r) * (world_x - x_r) + (world_y - y_b) * (world_y - y_b)) <= click_tolerance) {
+    } else if (float_sqrt((world_x - x_r) * (world_x - x_r) +
+                          (world_y - y_b) * (world_y - y_b)) <=
+               click_tolerance) {
       hit_handle = RESIZE_BR;
     }
     // Check edges
-    else if (distance_to_segment(world_x, world_y, x_l, y_t, x_r, y_t) <= click_tolerance) {
+    else if (distance_to_segment(world_x, world_y, x_l, y_t, x_r, y_t) <=
+             click_tolerance) {
       hit_handle = RESIZE_T;
-    }
-    else if (distance_to_segment(world_x, world_y, x_l, y_b, x_r, y_b) <= click_tolerance) {
+    } else if (distance_to_segment(world_x, world_y, x_l, y_b, x_r, y_b) <=
+               click_tolerance) {
       hit_handle = RESIZE_B;
-    }
-    else if (distance_to_segment(world_x, world_y, x_l, y_t, x_l, y_b) <= click_tolerance) {
+    } else if (distance_to_segment(world_x, world_y, x_l, y_t, x_l, y_b) <=
+               click_tolerance) {
       hit_handle = RESIZE_L;
-    }
-    else if (distance_to_segment(world_x, world_y, x_r, y_t, x_r, y_b) <= click_tolerance) {
+    } else if (distance_to_segment(world_x, world_y, x_r, y_t, x_r, y_b) <=
+               click_tolerance) {
       hit_handle = RESIZE_R;
     }
   }
@@ -508,11 +502,16 @@ on_mouse_down(int button, float x, float y, int shift, int ctrl) {
       ConnectionComponent *conn = &connection_components[i];
       int from = conn->from_entity;
       int to = conn->to_entity;
-      if (from >= 0 && from < (int)entity_count && to >= 0 && to < (int)entity_count) {
-        float x1 = transform_components[from].x + transform_components[from].w / 2.0f;
-        float y1 = transform_components[from].y + transform_components[from].h / 2.0f;
-        float x2 = transform_components[to].x + transform_components[to].w / 2.0f;
-        float y2 = transform_components[to].y + transform_components[to].h / 2.0f;
+      if (from >= 0 && from < (int)entity_count && to >= 0 &&
+          to < (int)entity_count) {
+        float x1 =
+            transform_components[from].x + transform_components[from].w / 2.0f;
+        float y1 =
+            transform_components[from].y + transform_components[from].h / 2.0f;
+        float x2 =
+            transform_components[to].x + transform_components[to].w / 2.0f;
+        float y2 =
+            transform_components[to].y + transform_components[to].h / 2.0f;
         float dist = distance_to_segment(world_x, world_y, x1, y1, x2, y2);
         float tolerance = 8.0f / uniforms.zoom;
         if (dist <= tolerance) {
@@ -556,11 +555,14 @@ on_mouse_down(int button, float x, float y, int shift, int ctrl) {
       editing_node_idx = hit_node_idx;
       selected_node_idx = hit_node_idx;
 
-      float sx = transform_components[hit_node_idx].x * uniforms.zoom + uniforms.pan_x;
-      float sy = transform_components[hit_node_idx].y * uniforms.zoom + uniforms.pan_y;
+      float sx =
+          transform_components[hit_node_idx].x * uniforms.zoom + uniforms.pan_x;
+      float sy =
+          transform_components[hit_node_idx].y * uniforms.zoom + uniforms.pan_y;
 
       js_set_editing_state(1, sx, sy, transform_components[hit_node_idx].w,
-                           transform_components[hit_node_idx].h, text_components[hit_node_idx].text, 120,
+                           transform_components[hit_node_idx].h,
+                           text_components[hit_node_idx].text, 120,
                            hit_node_idx);
 
       is_dragging_node = 0;
@@ -575,14 +577,16 @@ on_mouse_down(int button, float x, float y, int shift, int ctrl) {
       selected_node_idx = hit_node_idx;
     } else {
       if (ctrl) {
-        interaction_components[hit_node_idx].selected = !interaction_components[hit_node_idx].selected;
+        interaction_components[hit_node_idx].selected =
+            !interaction_components[hit_node_idx].selected;
         if (interaction_components[hit_node_idx].selected) {
           selected_node_idx = hit_node_idx;
         } else {
           if (selected_node_idx == hit_node_idx) {
             selected_node_idx = -1;
             for (unsigned int i = 0; i < entity_count; i++) {
-              if (ecs_has_component(i, COMP_INTERACTION) && interaction_components[i].selected) {
+              if (ecs_has_component(i, COMP_INTERACTION) &&
+                  interaction_components[i].selected) {
                 selected_node_idx = (int)i;
                 break;
               }
@@ -602,7 +606,8 @@ on_mouse_down(int button, float x, float y, int shift, int ctrl) {
 
       is_dragging_node = 1;
       for (unsigned int i = 0; i < entity_count; i++) {
-        if (ecs_has_component(i, COMP_INTERACTION) && interaction_components[i].selected) {
+        if (ecs_has_component(i, COMP_INTERACTION) &&
+            interaction_components[i].selected) {
           interaction_components[i].is_dragging = 1;
         }
       }
@@ -638,6 +643,7 @@ on_mouse_down(int button, float x, float y, int shift, int ctrl) {
 }
 
 __attribute__((visibility("default"))) void on_mouse_move(float x, float y) {
+  mark_dirty();
   mouse_world_x = (x - uniforms.pan_x) / uniforms.zoom;
   mouse_world_y = (y - uniforms.pan_y) / uniforms.zoom;
 
@@ -645,8 +651,10 @@ __attribute__((visibility("default"))) void on_mouse_move(float x, float y) {
     uniforms.pan_x += (x - last_mouse_screen_x);
     uniforms.pan_y += (y - last_mouse_screen_y);
   } else if (is_selecting_marquee) {
-    float draw_x = (marquee_start_x < mouse_world_x) ? marquee_start_x : mouse_world_x;
-    float draw_y = (marquee_start_y < mouse_world_y) ? marquee_start_y : mouse_world_y;
+    float draw_x =
+        (marquee_start_x < mouse_world_x) ? marquee_start_x : mouse_world_x;
+    float draw_y =
+        (marquee_start_y < mouse_world_y) ? marquee_start_y : mouse_world_y;
     float draw_w = (marquee_start_x < mouse_world_x)
                        ? (mouse_world_x - marquee_start_x)
                        : (marquee_start_x - mouse_world_x);
@@ -672,24 +680,32 @@ __attribute__((visibility("default"))) void on_mouse_move(float x, float y) {
     float new_h = resize_initial_h;
 
     // Calculate unconstrained dimensions
-    if (active_resize_handle == RESIZE_R || active_resize_handle == RESIZE_TR || active_resize_handle == RESIZE_BR) {
+    if (active_resize_handle == RESIZE_R || active_resize_handle == RESIZE_TR ||
+        active_resize_handle == RESIZE_BR) {
       new_w = resize_initial_w + dx;
-    } else if (active_resize_handle == RESIZE_L || active_resize_handle == RESIZE_TL || active_resize_handle == RESIZE_BL) {
+    } else if (active_resize_handle == RESIZE_L ||
+               active_resize_handle == RESIZE_TL ||
+               active_resize_handle == RESIZE_BL) {
       new_w = resize_initial_w - dx;
     }
 
-    if (active_resize_handle == RESIZE_B || active_resize_handle == RESIZE_BL || active_resize_handle == RESIZE_BR) {
+    if (active_resize_handle == RESIZE_B || active_resize_handle == RESIZE_BL ||
+        active_resize_handle == RESIZE_BR) {
       new_h = resize_initial_h + dy;
-    } else if (active_resize_handle == RESIZE_T || active_resize_handle == RESIZE_TL || active_resize_handle == RESIZE_TR) {
+    } else if (active_resize_handle == RESIZE_T ||
+               active_resize_handle == RESIZE_TL ||
+               active_resize_handle == RESIZE_TR) {
       new_h = resize_initial_h - dy;
     }
 
     if (rn->type == WIDGET_STICKY || rn->type == WIDGET_IMAGE) {
       if (resize_initial_w > 0.0f && resize_initial_h > 0.0f) {
         float scale = 1.0f;
-        if (active_resize_handle == RESIZE_L || active_resize_handle == RESIZE_R) {
+        if (active_resize_handle == RESIZE_L ||
+            active_resize_handle == RESIZE_R) {
           scale = new_w / resize_initial_w;
-        } else if (active_resize_handle == RESIZE_T || active_resize_handle == RESIZE_B) {
+        } else if (active_resize_handle == RESIZE_T ||
+                   active_resize_handle == RESIZE_B) {
           scale = new_h / resize_initial_h;
         } else { // TL, TR, BL, BR
           float scale_w = new_w / resize_initial_w;
@@ -699,7 +715,8 @@ __attribute__((visibility("default"))) void on_mouse_move(float x, float y) {
 
         float min_scale_w = 2.0f / resize_initial_w;
         float min_scale_h = 2.0f / resize_initial_h;
-        float min_scale = (min_scale_w > min_scale_h) ? min_scale_w : min_scale_h;
+        float min_scale =
+            (min_scale_w > min_scale_h) ? min_scale_w : min_scale_h;
         if (scale < min_scale) {
           scale = min_scale;
         }
@@ -715,10 +732,12 @@ __attribute__((visibility("default"))) void on_mouse_move(float x, float y) {
     }
 
     // Apply anchors for Left and Top handles
-    if (active_resize_handle == RESIZE_L || active_resize_handle == RESIZE_TL || active_resize_handle == RESIZE_BL) {
+    if (active_resize_handle == RESIZE_L || active_resize_handle == RESIZE_TL ||
+        active_resize_handle == RESIZE_BL) {
       new_x = resize_initial_x + resize_initial_w - new_w;
     }
-    if (active_resize_handle == RESIZE_T || active_resize_handle == RESIZE_TL || active_resize_handle == RESIZE_TR) {
+    if (active_resize_handle == RESIZE_T || active_resize_handle == RESIZE_TL ||
+        active_resize_handle == RESIZE_TR) {
       new_y = resize_initial_y + resize_initial_h - new_h;
     }
 
@@ -728,7 +747,9 @@ __attribute__((visibility("default"))) void on_mouse_move(float x, float y) {
     sn->h = new_h;
 
     if (rn->type != WIDGET_IMAGE && rn->type != WIDGET_PATH) {
-      js_init_node_texture(selected_node_idx, text_components[selected_node_idx].text, rn->type, sn->w, sn->h);
+      js_init_node_texture(selected_node_idx,
+                           text_components[selected_node_idx].text, rn->type,
+                           sn->w, sn->h);
     }
   }
 
@@ -740,6 +761,7 @@ __attribute__((visibility("default"))) void on_mouse_move(float x, float y) {
 
 __attribute__((visibility("default"))) void on_mouse_up(int button, float x,
                                                         float y) {
+  mark_dirty();
   is_panning = 0;
   is_selecting_marquee = 0;
 
@@ -759,7 +781,9 @@ __attribute__((visibility("default"))) void on_mouse_up(int button, float x,
     if (dist < 3.0f && selected_node_idx != -1) {
       int hit_node_idx = -1;
       for (int i = (int)entity_count - 1; i >= 0; i--) {
-        if (ecs_has_component(i, COMP_TRANSFORM) && render_components[i].type != WIDGET_ARROW && render_components[i].type != WIDGET_PATH) {
+        if (ecs_has_component(i, COMP_TRANSFORM) &&
+            render_components[i].type != WIDGET_ARROW &&
+            render_components[i].type != WIDGET_PATH) {
           TransformComponent *n = &transform_components[i];
           if (mouse_down_world_x >= n->x && mouse_down_world_x <= n->x + n->w &&
               mouse_down_world_y >= n->y && mouse_down_world_y <= n->y + n->h) {
@@ -786,6 +810,7 @@ __attribute__((visibility("default"))) void on_mouse_up(int button, float x,
 
 __attribute__((visibility("default"))) void on_mouse_wheel(float delta_y,
                                                            float x, float y) {
+  mark_dirty();
   float factor = (delta_y < 0.0f) ? 1.08f : 0.9259f;
 
   float old_zoom = uniforms.zoom;
@@ -806,16 +831,19 @@ __attribute__((visibility("default"))) void on_mouse_wheel(float delta_y,
 __attribute__((visibility("default"))) void pan_canvas(float dx, float dy) {
   uniforms.pan_x += dx;
   uniforms.pan_y += dy;
+  mark_dirty();
 }
 
 __attribute__((visibility("default"))) void on_key_down(int key) {
+  mark_dirty();
   if (key == 16) { // Shift key
     shift_pressed = 1;
   } else if (key == 32) { // Space bar
     space_pressed = 1;
   } else if (key == 8 || key == 46) { // Backspace or Delete
     for (int i = (int)entity_count - 1; i >= 0; i--) {
-      if (ecs_has_component(i, COMP_INTERACTION) && interaction_components[i].selected) {
+      if (ecs_has_component(i, COMP_INTERACTION) &&
+          interaction_components[i].selected) {
         ecs_delete_entity(i);
       }
     }
@@ -824,6 +852,7 @@ __attribute__((visibility("default"))) void on_key_down(int key) {
 }
 
 __attribute__((visibility("default"))) void on_key_up(int key) {
+  mark_dirty();
   if (key == 16) {
     shift_pressed = 0;
   } else if (key == 32) {
@@ -879,6 +908,7 @@ __attribute__((visibility("default"))) void set_node_texture_id(int idx,
                                                                 int tex_id) {
   if (idx >= 0 && idx < (int)entity_count) {
     render_components[idx].texture_id = tex_id;
+    mark_dirty();
   }
 }
 
@@ -954,12 +984,15 @@ set_node_text_color(int idx, float r, float g, float b) {
   if (idx >= 0 && idx < (int)entity_count) {
     if (interaction_components[idx].selected) {
       for (unsigned int i = 0; i < entity_count; i++) {
-        if (ecs_has_component(i, COMP_INTERACTION) && interaction_components[i].selected) {
+        if (ecs_has_component(i, COMP_INTERACTION) &&
+            interaction_components[i].selected) {
           float tr = r;
           float tg = g;
           float tb = b;
-          if (render_components[i].bg_a > 0.001f && render_components[i].bg_r < 0.01f &&
-              render_components[i].bg_g < 0.01f && render_components[i].bg_b < 0.01f) {
+          if (render_components[i].bg_a > 0.001f &&
+              render_components[i].bg_r < 0.01f &&
+              render_components[i].bg_g < 0.01f &&
+              render_components[i].bg_b < 0.01f) {
             tr = 1.0f;
             tg = 1.0f;
             tb = 1.0f;
@@ -972,8 +1005,11 @@ set_node_text_color(int idx, float r, float g, float b) {
             render_components[i].bg_g = tg;
             render_components[i].bg_b = tb;
           }
-          if (render_components[i].type != WIDGET_IMAGE && render_components[i].type != WIDGET_PATH) {
-            js_init_node_texture(i, text_components[i].text, render_components[i].type, transform_components[i].w, transform_components[i].h);
+          if (render_components[i].type != WIDGET_IMAGE &&
+              render_components[i].type != WIDGET_PATH) {
+            js_init_node_texture(
+                i, text_components[i].text, render_components[i].type,
+                transform_components[i].w, transform_components[i].h);
           }
         }
       }
@@ -981,8 +1017,10 @@ set_node_text_color(int idx, float r, float g, float b) {
       float tr = r;
       float tg = g;
       float tb = b;
-      if (render_components[idx].bg_a > 0.001f && render_components[idx].bg_r < 0.01f &&
-          render_components[idx].bg_g < 0.01f && render_components[idx].bg_b < 0.01f) {
+      if (render_components[idx].bg_a > 0.001f &&
+          render_components[idx].bg_r < 0.01f &&
+          render_components[idx].bg_g < 0.01f &&
+          render_components[idx].bg_b < 0.01f) {
         tr = 1.0f;
         tg = 1.0f;
         tb = 1.0f;
@@ -995,10 +1033,14 @@ set_node_text_color(int idx, float r, float g, float b) {
         render_components[idx].bg_g = tg;
         render_components[idx].bg_b = tb;
       }
-      if (render_components[idx].type != WIDGET_IMAGE && render_components[idx].type != WIDGET_PATH) {
-        js_init_node_texture(idx, text_components[idx].text, render_components[idx].type, transform_components[idx].w, transform_components[idx].h);
+      if (render_components[idx].type != WIDGET_IMAGE &&
+          render_components[idx].type != WIDGET_PATH) {
+        js_init_node_texture(
+            idx, text_components[idx].text, render_components[idx].type,
+            transform_components[idx].w, transform_components[idx].h);
       }
     }
+    mark_dirty();
   }
 }
 
@@ -1007,7 +1049,8 @@ set_node_bg_color(int idx, float r, float g, float b, float a) {
   if (idx >= 0 && idx < (int)entity_count) {
     if (interaction_components[idx].selected) {
       for (unsigned int i = 0; i < entity_count; i++) {
-        if (ecs_has_component(i, COMP_INTERACTION) && interaction_components[i].selected) {
+        if (ecs_has_component(i, COMP_INTERACTION) &&
+            interaction_components[i].selected) {
           render_components[i].bg_r = r;
           render_components[i].bg_g = g;
           render_components[i].bg_b = b;
@@ -1017,8 +1060,11 @@ set_node_bg_color(int idx, float r, float g, float b, float a) {
             render_components[i].g = 1.0f;
             render_components[i].b = 1.0f;
           }
-          if (render_components[i].type != WIDGET_IMAGE && render_components[i].type != WIDGET_PATH) {
-            js_init_node_texture(i, text_components[i].text, render_components[i].type, transform_components[i].w, transform_components[i].h);
+          if (render_components[i].type != WIDGET_IMAGE &&
+              render_components[i].type != WIDGET_PATH) {
+            js_init_node_texture(
+                i, text_components[i].text, render_components[i].type,
+                transform_components[i].w, transform_components[i].h);
           }
         }
       }
@@ -1032,10 +1078,14 @@ set_node_bg_color(int idx, float r, float g, float b, float a) {
         render_components[idx].g = 1.0f;
         render_components[idx].b = 1.0f;
       }
-      if (render_components[idx].type != WIDGET_IMAGE && render_components[idx].type != WIDGET_PATH) {
-        js_init_node_texture(idx, text_components[idx].text, render_components[idx].type, transform_components[idx].w, transform_components[idx].h);
+      if (render_components[idx].type != WIDGET_IMAGE &&
+          render_components[idx].type != WIDGET_PATH) {
+        js_init_node_texture(
+            idx, text_components[idx].text, render_components[idx].type,
+            transform_components[idx].w, transform_components[idx].h);
       }
     }
+    mark_dirty();
   }
 }
 
@@ -1044,7 +1094,8 @@ set_node_border_color(int idx, float r, float g, float b, float a) {
   if (idx >= 0 && idx < (int)entity_count) {
     if (interaction_components[idx].selected) {
       for (unsigned int i = 0; i < entity_count; i++) {
-        if (ecs_has_component(i, COMP_INTERACTION) && interaction_components[i].selected) {
+        if (ecs_has_component(i, COMP_INTERACTION) &&
+            interaction_components[i].selected) {
           render_components[i].border_r = r;
           render_components[i].border_g = g;
           render_components[i].border_b = b;
@@ -1057,6 +1108,7 @@ set_node_border_color(int idx, float r, float g, float b, float a) {
       render_components[idx].border_b = b;
       render_components[idx].border_a = a;
     }
+    mark_dirty();
   }
 }
 
@@ -1075,19 +1127,27 @@ __attribute__((visibility("default"))) void set_node_font_size(int idx,
       size = 120.0f;
     if (interaction_components[idx].selected) {
       for (unsigned int i = 0; i < entity_count; i++) {
-        if (ecs_has_component(i, COMP_INTERACTION) && interaction_components[i].selected) {
+        if (ecs_has_component(i, COMP_INTERACTION) &&
+            interaction_components[i].selected) {
           render_components[i].font_size = size;
-          if (render_components[i].type != WIDGET_IMAGE && render_components[i].type != WIDGET_PATH) {
-            js_init_node_texture(i, text_components[i].text, render_components[i].type, transform_components[i].w, transform_components[i].h);
+          if (render_components[i].type != WIDGET_IMAGE &&
+              render_components[i].type != WIDGET_PATH) {
+            js_init_node_texture(
+                i, text_components[i].text, render_components[i].type,
+                transform_components[i].w, transform_components[i].h);
           }
         }
       }
     } else {
       render_components[idx].font_size = size;
-      if (render_components[idx].type != WIDGET_IMAGE && render_components[idx].type != WIDGET_PATH) {
-        js_init_node_texture(idx, text_components[idx].text, render_components[idx].type, transform_components[idx].w, transform_components[idx].h);
+      if (render_components[idx].type != WIDGET_IMAGE &&
+          render_components[idx].type != WIDGET_PATH) {
+        js_init_node_texture(
+            idx, text_components[idx].text, render_components[idx].type,
+            transform_components[idx].w, transform_components[idx].h);
       }
     }
+    mark_dirty();
   }
 }
 
@@ -1115,7 +1175,8 @@ __attribute__((visibility("default"))) void set_node_size(int idx, float w,
 
     if (interaction_components[idx].selected) {
       for (unsigned int i = 0; i < entity_count; i++) {
-        if (ecs_has_component(i, COMP_INTERACTION) && interaction_components[i].selected) {
+        if (ecs_has_component(i, COMP_INTERACTION) &&
+            interaction_components[i].selected) {
           float final_w = w;
           float final_h = h;
           WidgetType t = render_components[i].type;
@@ -1129,7 +1190,8 @@ __attribute__((visibility("default"))) void set_node_size(int idx, float w,
             }
           } else if (t == WIDGET_IMAGE) {
             if (transform_components[i].h > 0.0f) {
-              float aspect = transform_components[i].w / transform_components[i].h;
+              float aspect =
+                  transform_components[i].w / transform_components[i].h;
               if (height_changed && !width_changed) {
                 final_h = h;
                 final_w = h * aspect;
@@ -1143,7 +1205,8 @@ __attribute__((visibility("default"))) void set_node_size(int idx, float w,
           transform_components[i].w = final_w;
           transform_components[i].h = final_h;
           if (t != WIDGET_IMAGE && t != WIDGET_PATH) {
-            js_init_node_texture(i, text_components[i].text, t, final_w, final_h);
+            js_init_node_texture(i, text_components[i].text, t, final_w,
+                                 final_h);
           }
         }
       }
@@ -1161,7 +1224,8 @@ __attribute__((visibility("default"))) void set_node_size(int idx, float w,
         }
       } else if (t == WIDGET_IMAGE) {
         if (transform_components[idx].h > 0.0f) {
-          float aspect = transform_components[idx].w / transform_components[idx].h;
+          float aspect =
+              transform_components[idx].w / transform_components[idx].h;
           if (height_changed && !width_changed) {
             final_h = h;
             final_w = h * aspect;
@@ -1175,10 +1239,12 @@ __attribute__((visibility("default"))) void set_node_size(int idx, float w,
       transform_components[idx].w = final_w;
       transform_components[idx].h = final_h;
       if (t != WIDGET_IMAGE && t != WIDGET_PATH) {
-        js_init_node_texture(idx, text_components[idx].text, t, final_w, final_h);
+        js_init_node_texture(idx, text_components[idx].text, t, final_w,
+                             final_h);
       }
     }
   }
+  mark_dirty();
 }
 
 __attribute__((visibility("default"))) void shift_node(int from, int to) {
@@ -1276,6 +1342,7 @@ __attribute__((visibility("default"))) void shift_node(int from, int to) {
       editing_node_idx++;
     }
   }
+  mark_dirty();
 }
 
 __attribute__((visibility("default"))) void bring_to_front_wasm(int idx) {
@@ -1300,20 +1367,24 @@ __attribute__((visibility("default"))) void move_backward_wasm(int idx) {
 
 __attribute__((visibility("default"))) void set_arrow_tool(int active) {
   arrow_tool_active = active;
+  mark_dirty();
 }
 
 __attribute__((visibility("default"))) void on_text_commit() {
   if (editing_node_idx != -1) {
-    js_init_node_texture(editing_node_idx, text_components[editing_node_idx].text,
+    js_init_node_texture(editing_node_idx,
+                         text_components[editing_node_idx].text,
                          render_components[editing_node_idx].type,
                          transform_components[editing_node_idx].w,
                          transform_components[editing_node_idx].h);
   }
   editing_node_idx = -1;
+  mark_dirty();
 }
 
 __attribute__((visibility("default"))) void on_text_cancel() {
   editing_node_idx = -1;
+  mark_dirty();
 }
 
 __attribute__((visibility("default"))) void
@@ -1348,8 +1419,8 @@ add_widget_wasm(int type, float x, float y, int texture_id, int img_w,
     }
   }
 
-  Entity e = add_entity_full(type, x - w / 2.0f, y - h / 2.0f, w, h, default_text,
-                             texture_id);
+  Entity e = add_entity_full(type, x - w / 2.0f, y - h / 2.0f, w, h,
+                             default_text, texture_id);
 
   selected_node_idx = (int)e;
   for (unsigned int i = 0; i < entity_count; i++) {
@@ -1357,6 +1428,7 @@ add_widget_wasm(int type, float x, float y, int texture_id, int img_w,
       interaction_components[i].selected = (i == e);
     }
   }
+  mark_dirty();
 }
 
 __attribute__((visibility("default"))) void on_btn_add_click() {
@@ -1369,6 +1441,7 @@ __attribute__((visibility("default"))) void on_btn_clear_click() {
   ecs_init();
   selected_node_idx = -1;
   editing_node_idx = -1;
+  mark_dirty();
 }
 
 int active_stroke_node_idx = -1;
@@ -1379,7 +1452,8 @@ start_stroke(float world_x, float world_y, float r, float g, float b) {
     return;
 
   Entity e = ecs_create_entity();
-  if (e == (Entity)-1) return;
+  if (e == (Entity)-1)
+    return;
 
   ecs_add_component(e, COMP_RENDER);
   RenderComponent *rc = &render_components[e];
@@ -1408,6 +1482,7 @@ start_stroke(float world_x, float world_y, float r, float g, float b) {
     path_point_count++;
     path_components[e].path_point_len++;
   }
+  mark_dirty();
 }
 
 __attribute__((visibility("default"))) void add_stroke_point(float world_x,
@@ -1431,6 +1506,7 @@ __attribute__((visibility("default"))) void add_stroke_point(float world_x,
     path_point_count++;
     p->path_point_len++;
   }
+  mark_dirty();
 }
 
 __attribute__((visibility("default"))) void end_stroke() {
@@ -1474,12 +1550,16 @@ __attribute__((visibility("default"))) void end_stroke() {
   }
 
   active_stroke_node_idx = -1;
+  mark_dirty();
 }
 
 // -------------------------------------------------------------
 // Frame Loop & Render Compiler
 // -------------------------------------------------------------
 float current_time_ms = 0.0f;
+int needs_redraw = 1;
+
+__attribute__((visibility("default"))) void mark_dirty() { needs_redraw = 1; }
 
 typedef struct {
   int pipeline_id;
@@ -1495,6 +1575,35 @@ unsigned int last_batch_index_start = 0;
 
 __attribute__((visibility("default"))) void tick_app(float timestamp) {
   current_time_ms = timestamp;
+
+  if (!needs_redraw) {
+    js_wgpu_begin_render_pass();
+    js_wgpu_write_buffer(uniform_buffer_id, 0, &uniforms, sizeof(Uniforms));
+
+    for (int b = 0; b < batch_count; b++) {
+      DrawBatch *batch = &batches[b];
+      js_wgpu_set_pipeline(batch->pipeline_id);
+      js_wgpu_set_bind_group(0, uniform_buffer_id, batch->texture_id);
+      js_wgpu_draw_indexed(batch->index_count, batch->index_start,
+                           index_buffer_id, vertex_buffer_id);
+    }
+
+    js_wgpu_end_render_pass();
+
+    int shapes_count = 0;
+    for (unsigned int i = 0; i < entity_count; i++) {
+      if (ecs_has_component(i, COMP_RENDER)) {
+        WidgetType t = render_components[i].type;
+        if (t == WIDGET_STICKY || t == WIDGET_RECT || t == WIDGET_OVAL ||
+            t == WIDGET_TRIANGLE) {
+          shapes_count++;
+        }
+      }
+    }
+    js_update_stats(uniforms.pan_x, uniforms.pan_y, uniforms.zoom,
+                    shapes_count);
+    return;
+  }
 
   // Clear dynamic draw buffers
   vertex_count = 0;
@@ -1589,13 +1698,15 @@ __attribute__((visibility("default"))) void tick_app(float timestamp) {
   for (unsigned int i = 0; i < entity_count; i++) {
     if (ecs_has_component(i, COMP_RENDER)) {
       WidgetType t = render_components[i].type;
-      if (t == WIDGET_STICKY || t == WIDGET_RECT || t == WIDGET_OVAL || t == WIDGET_TRIANGLE) {
+      if (t == WIDGET_STICKY || t == WIDGET_RECT || t == WIDGET_OVAL ||
+          t == WIDGET_TRIANGLE) {
         shapes_count++;
       }
     }
   }
 
   js_update_stats(uniforms.pan_x, uniforms.pan_y, uniforms.zoom, shapes_count);
+  needs_redraw = 0;
 }
 
 void flush_batch(int pipeline_id, int bind_texture_id) {
@@ -1613,4 +1724,34 @@ void flush_batch(int pipeline_id, int bind_texture_id) {
 
 __attribute__((visibility("default"))) void create_100k_infographics() {
   generate_100k_infographics();
+  mark_dirty();
+}
+
+static int type_counts[8];
+
+__attribute__((visibility("default"))) int *get_widget_type_counts() {
+  for (int i = 0; i < 8; i++) {
+    type_counts[i] = 0;
+  }
+  for (unsigned int i = 0; i < entity_count; i++) {
+    if (ecs_has_component(i, COMP_RENDER)) {
+      WidgetType t = render_components[i].type;
+      if (t >= 0 && t < 8) {
+        type_counts[t]++;
+      }
+    }
+  }
+  return type_counts;
+}
+
+__attribute__((visibility("default"))) int get_debug_batch_count() {
+  return batch_count;
+}
+
+__attribute__((visibility("default"))) int get_debug_vertex_count() {
+  return vertex_count;
+}
+
+__attribute__((visibility("default"))) int get_debug_index_count() {
+  return index_count;
 }

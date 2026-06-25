@@ -466,7 +466,7 @@ void render_system(float left, float right, float top, float bottom, int editing
 
     RenderComponent *r = &render_components[i];
 
-    // Culling system check
+    // Frustum culling check
     if (r->type == WIDGET_ARROW) {
       if (ecs_has_component(i, COMP_CONNECTION)) {
         ConnectionComponent *conn = &connection_components[i];
@@ -483,18 +483,22 @@ void render_system(float left, float right, float top, float bottom, int editing
           float max_x = (ax1 > ax2) ? ax1 : ax2;
           float min_y = (ay1 < ay2) ? ay1 : ay2;
           float max_y = (ay1 > ay2) ? ay1 : ay2;
-          if (max_x < left || min_x > right || max_y < top || min_y > bottom) {
+          float margin = 20.0f;
+          if (max_x + margin < left || min_x - margin > right ||
+              max_y + margin < top || min_y - margin > bottom) {
             continue;
           }
         }
       }
-    } else if (r->type != WIDGET_PATH) {
+    } else {
       if (ecs_has_component(i, COMP_TRANSFORM)) {
         TransformComponent *t = &transform_components[i];
-        if (t->x + t->w < left || t->x > right || t->y + t->h < top || t->y > bottom) {
+        float margin = 20.0f;
+        if (t->x + t->w + margin < left || t->x - margin > right ||
+            t->y + t->h + margin < top || t->y - margin > bottom) {
           continue;
         }
-        if (t->w * uniforms.zoom < 2.0f) {
+        if (t->w * uniforms.zoom < 0.5f && t->h * uniforms.zoom < 0.5f) {
           continue;
         }
       }
@@ -515,9 +519,11 @@ void render_system(float left, float right, float top, float bottom, int editing
     RenderComponent *r = &render_components[i];
     if (r->type == WIDGET_ARROW) continue;
 
-    // Culling system check for contour/handles
+    // Frustum culling check for contour/handles
     TransformComponent *t = &transform_components[i];
-    if (t->x + t->w < left || t->x > right || t->y + t->h < top || t->y > bottom) {
+    float margin = 20.0f;
+    if (t->x + t->w + margin < left || t->x - margin > right ||
+        t->y + t->h + margin < top || t->y - margin > bottom) {
       continue;
     }
 
