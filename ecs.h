@@ -88,6 +88,13 @@ Entity ecs_create_entity();
 void ecs_delete_entity(Entity entity);
 void ecs_add_component(Entity entity, ComponentMask component);
 void ecs_remove_component(Entity entity, ComponentMask component);
-int ecs_has_component(Entity entity, ComponentMask component);
+
+static inline int ecs_has_component(Entity entity, ComponentMask component) {
+  if (entity < entity_count) {
+    return (entity_masks[entity] & component) == component;
+  }
+  return 0;
+}
 
 #endif // ECS_H
+

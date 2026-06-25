@@ -125,9 +125,4 @@ void ecs_remove_component(Entity entity, ComponentMask component) {
   }
 }
 
-int ecs_has_component(Entity entity, ComponentMask component) {
-  if (entity < entity_count) {
-    return (entity_masks[entity] & component) == component;
-  }
-  return 0;
-}
+

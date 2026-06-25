@@ -149,7 +149,26 @@ uint32_t decode_utf8(const char **str) {
   return codepoint;
 }
 
+static const GlyphInfo *ascii_glyph_cache[256];
+static int ascii_glyph_cache_initialized = 0;
+
 const GlyphInfo *lookup_glyph(uint32_t codepoint) {
+  if (codepoint < 256) {
+    if (!ascii_glyph_cache_initialized) {
+      for (int i = 0; i < 256; i++) {
+        ascii_glyph_cache[i] = NULL;
+      }
+      for (int i = 0; i < FONT_GLYPHS_COUNT; i++) {
+        uint32_t cp = font_glyphs[i].codepoint;
+        if (cp < 256) {
+          ascii_glyph_cache[cp] = &font_glyphs[i];
+        }
+      }
+      ascii_glyph_cache_initialized = 1;
+    }
+    return ascii_glyph_cache[codepoint];
+  }
+
   int low = 0;
   int high = FONT_GLYPHS_COUNT - 1;
   while (low <= high) {
@@ -164,6 +183,7 @@ const GlyphInfo *lookup_glyph(uint32_t codepoint) {
   }
   return NULL;
 }
+
 
 // -------------------------------------------------------------
 // Immediate Mode Rendering Pipeline structures

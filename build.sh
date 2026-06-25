@@ -10,10 +10,12 @@ clang -O2 -o compile_font compile_font.c -lm -lz
 
 # 3. Compile target canvas.wasm
 clang --target=wasm32 \
+  -O3 \
   -nostdlib \
   -fno-builtin \
   -Wl,--no-entry \
   -Wl,--export-all \
   -Wl,--allow-undefined \
   -o canvas.wasm canvas.c ecs.c systems.c initial_content.c
+
 

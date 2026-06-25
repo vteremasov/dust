@@ -203,32 +203,37 @@ static void draw_widget_text_content(Entity e, float tx_offset_y, float char_w, 
     int l_start = line_starts[l];
     int l_len = line_lens[l];
     
-    // Calculate total proportional width of this line
+    // Decoded codepoints and advances cache
+    unsigned int line_cps[512];
+    float line_advs[512];
+    int line_cp_count = 0;
+    
     float total_w = 0.0f;
     const char *ptr = text + l_start;
     const char *line_end = ptr + l_len;
-    while (ptr < line_end) {
+    while (ptr < line_end && line_cp_count < 512) {
       unsigned int cp = decode_utf8(&ptr);
       if (cp != '\r') {
-        total_w += get_char_advance(cp) * char_w;
+        float adv = get_char_advance(cp) * char_w;
+        line_cps[line_cp_count] = cp;
+        line_advs[line_cp_count] = adv;
+        line_cp_count++;
+        total_w += adv;
       }
     }
     
     float tx = t->x + (t->w - total_w) / 2.0f;
     float ty = start_ty + l * (char_h + line_spacing);
 
-    // Draw each character in the range using proportional offset
+    // Draw each character in the range using cached layout and decoding
     float cur_x = tx;
-    ptr = text + l_start;
-    while (ptr < line_end) {
-      unsigned int cp = decode_utf8(&ptr);
-      if (cp != '\r') {
-        float advance = get_char_advance(cp) * char_w;
-        float x_pos = cur_x - cell_size * (24.0f / 64.0f);
-        float y_pos = ty - cell_size * (46.0f / 64.0f) + char_h * 0.75f;
-        draw_char(cp, x_pos, y_pos, cell_size, cell_size, tr, tg, tb, ta);
-        cur_x += advance;
-      }
+    for (int i = 0; i < line_cp_count; i++) {
+      unsigned int cp = line_cps[i];
+      float advance = line_advs[i];
+      float x_pos = cur_x - cell_size * (24.0f / 64.0f);
+      float y_pos = ty - cell_size * (46.0f / 64.0f) + char_h * 0.75f;
+      draw_char(cp, x_pos, y_pos, cell_size, cell_size, tr, tg, tb, ta);
+      cur_x += advance;
     }
   }
 }

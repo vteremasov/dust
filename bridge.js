@@ -27,6 +27,21 @@ let wasmMemory = null;
 let currentZoom = 1.0;
 let currentPanX = 0.0;
 let currentPanY = 0.0;
+let lastPanText = "";
+let lastZoomText = "";
+let lastNodeCount = -1;
+let lastProps = {
+    selectedIdx: -1,
+    w: -1,
+    h: -1,
+    type: -1,
+    fontSize: -1,
+    bgR: -1, bgG: -1, bgB: -1, bgA: -1,
+    borderR: -1, borderG: -1, borderB: -1, borderA: -1,
+    textR: -1, textG: -1, textB: -1
+};
+
+
 
 let isDebugExpanded = false;
 let frameCountForFps = 0;
@@ -235,10 +250,24 @@ const importObject = {
             currentZoom = zoom;
             currentPanX = pan_x;
             currentPanY = pan_y;
-            document.getElementById('stat-pan').innerText = `X: ${Math.round(pan_x)}, Y: ${Math.round(pan_y)}`;
-            document.getElementById('stat-zoom').innerText = `${Math.round(zoom * 100)}%`;
-            document.getElementById('stat-nodes').innerText = node_count;
+            
+            const panText = `X: ${Math.round(pan_x)}, Y: ${Math.round(pan_y)}`;
+            const zoomText = `${Math.round(zoom * 100)}%`;
+            
+            if (panText !== lastPanText) {
+                document.getElementById('stat-pan').innerText = panText;
+                lastPanText = panText;
+            }
+            if (zoomText !== lastZoomText) {
+                document.getElementById('stat-zoom').innerText = zoomText;
+                lastZoomText = zoomText;
+            }
+            if (node_count !== lastNodeCount) {
+                document.getElementById('stat-nodes').innerText = node_count;
+                lastNodeCount = node_count;
+            }
         },
+
         js_set_editing_state: (is_editing, x, y, w, h, current_text_ptr, max_len, idx) => {
             const editor = document.getElementById('text-editor');
             if (is_editing) {
@@ -424,12 +453,17 @@ function updatePropertiesPanel() {
     const panel = document.getElementById('properties-panel');
 
     if (selectedIdx === -1) {
-        panel.style.display = 'none';
+        if (panel.style.display !== 'none') {
+            panel.style.display = 'none';
+        }
         lastSelectedIdx = -1;
+        lastProps.selectedIdx = -1;
         return;
     }
 
-    panel.style.display = 'flex';
+    if (panel.style.display !== 'flex') {
+        panel.style.display = 'flex';
+    }
 
     // Query parameters from WASM
     const w = wasmInstance.exports.get_node_width(selectedIdx);
@@ -446,6 +480,35 @@ function updatePropertiesPanel() {
     const borderG = wasmInstance.exports.get_node_border_g(selectedIdx);
     const borderB = wasmInstance.exports.get_node_border_b(selectedIdx);
     const borderA = wasmInstance.exports.get_node_border_a(selectedIdx);
+
+    const textR = wasmInstance.exports.get_node_text_r(selectedIdx);
+    const textG = wasmInstance.exports.get_node_text_g(selectedIdx);
+    const textB = wasmInstance.exports.get_node_text_b(selectedIdx);
+
+    // Check if anything has changed
+    const changed = (
+        selectedIdx !== lastProps.selectedIdx ||
+        w !== lastProps.w ||
+        h !== lastProps.h ||
+        type !== lastProps.type ||
+        wasmFontSize !== lastProps.fontSize ||
+        bgR !== lastProps.bgR || bgG !== lastProps.bgG || bgB !== lastProps.bgB || bgA !== lastProps.bgA ||
+        borderR !== lastProps.borderR || borderG !== lastProps.borderG || borderB !== lastProps.borderB || borderA !== lastProps.borderA ||
+        textR !== lastProps.textR || textG !== lastProps.textG || textB !== lastProps.textB
+    );
+
+    if (!changed) {
+        lastSelectedIdx = selectedIdx;
+        return;
+    }
+
+    // Save to cache
+    lastProps = {
+        selectedIdx, w, h, type, fontSize: wasmFontSize,
+        bgR, bgG, bgB, bgA,
+        borderR, borderG, borderB, borderA,
+        textR, textG, textB
+    };
 
     if (!isUpdatingControls) {
         isUpdatingControls = true;
@@ -497,9 +560,6 @@ function updatePropertiesPanel() {
         document.getElementById('prop-border-color').disabled = (borderA <= 0.001);
 
         // Retrieve and set font color
-        const textR = wasmInstance.exports.get_node_text_r(selectedIdx);
-        const textG = wasmInstance.exports.get_node_text_g(selectedIdx);
-        const textB = wasmInstance.exports.get_node_text_b(selectedIdx);
         document.getElementById('prop-font-color').value = rgbToHex(textR, textG, textB);
 
         if (type <= 3 || type === 7) {
