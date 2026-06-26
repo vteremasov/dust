@@ -1,32 +1,8 @@
 #include "systems.h"
+#include "renderer.h"
 
 #define SOLID_U 0.046875f
 #define SOLID_V 0.015625f
-
-// External declarations from canvas.c
-typedef struct {
-  float pan_x;
-  float pan_y;
-  float zoom;
-  float pad1;
-  float screen_width;
-  float screen_height;
-  float pad2[2];
-} Uniforms;
-
-extern Uniforms uniforms;
-extern int vertex_count;
-extern int active_stroke_node_idx;
-
-extern void push_vertex(float x, float y, float u, float v, float r, float g, float b, float a);
-extern void push_index(unsigned int idx);
-extern void draw_rect(float x, float y, float w, float h, float r, float g, float b, float a);
-extern void draw_line(float x1, float y1, float x2, float y2, float thickness, float r, float g, float b, float a);
-extern void draw_char(unsigned int codepoint, float x, float y, float w, float h, float r, float g, float b, float a);
-extern void flush_batch(int pipeline_id, int bind_texture_id);
-extern float get_char_advance(unsigned int codepoint);
-extern unsigned int decode_utf8(const char **str);
-extern float float_sqrt(float val);
 
 // Math helpers
 static float float_cos(float val) { return __builtin_cosf(val); }
@@ -107,6 +83,21 @@ static void draw_filled_circle(float cx, float cy, float radius, float r, float 
     push_index(center_idx + 1 + i);
     push_index(center_idx + 1 + ((i + 1) % segments));
   }
+}
+
+static void draw_rect_border(float x, float y, float w, float h, float thickness, float r, float g, float b, float a) {
+  if (w <= thickness * 2.0f || h <= thickness * 2.0f) {
+    draw_rect(x, y, w, h, r, g, b, a);
+    return;
+  }
+  // Top border
+  draw_rect(x, y, w, thickness, r, g, b, a);
+  // Bottom border
+  draw_rect(x, y + h - thickness, w, thickness, r, g, b, a);
+  // Left border
+  draw_rect(x, y + thickness, thickness, h - thickness * 2.0f, r, g, b, a);
+  // Right border
+  draw_rect(x + w - thickness, y + thickness, thickness, h - thickness * 2.0f, r, g, b, a);
 }
 
 static void draw_oval_border(float cx, float cy, float rx, float ry, float thickness, float r, float g, float b, float a) {
@@ -252,18 +243,14 @@ static void draw_entity(Entity e, int is_editing, int default_texture_id) {
       draw_rect(t->x, t->y, t->w, t->h, r->bg_r, r->bg_g, r->bg_b, r->bg_a);
     }
     if (r->border_a > 0.001f) {
-      draw_rect(t->x, t->y, t->w, t->h, r->border_r, r->border_g, r->border_b, r->border_a);
-      if (r->bg_a > 0.001f) {
-        draw_rect(t->x + 2.0f, t->y + 2.0f, t->w - 4.0f, t->h - 4.0f, r->bg_r, r->bg_g, r->bg_b, r->bg_a);
-      }
+      draw_rect_border(t->x, t->y, t->w, t->h, 2.0f, r->border_r, r->border_g, r->border_b, r->border_a);
     }
   } else if (r->type == WIDGET_RECT) {
-    if (r->border_a > 0.001f) {
-      draw_rect(t->x, t->y, t->w, t->h, r->border_r, r->border_g, r->border_b, r->border_a);
-    }
     if (r->bg_a > 0.001f) {
-      float tr = (r->border_a > 0.001f) ? 2.0f : 0.0f;
-      draw_rect(t->x + tr, t->y + tr, t->w - tr * 2.0f, t->h - tr * 2.0f, r->bg_r, r->bg_g, r->bg_b, r->bg_a);
+      draw_rect(t->x, t->y, t->w, t->h, r->bg_r, r->bg_g, r->bg_b, r->bg_a);
+    }
+    if (r->border_a > 0.001f) {
+      draw_rect_border(t->x, t->y, t->w, t->h, 2.0f, r->border_r, r->border_g, r->border_b, r->border_a);
     }
   } else if (r->type == WIDGET_OVAL) {
     if (r->bg_a > 0.001f) {
