@@ -1,0 +1,4 @@
+CompileFlags:
+  Add:
+    - --target=wasm32
+    - -nostdlib

@@ -5,6 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Infinity Canvas - WebGPU & Pure C</title>
+    <link rel="icon" type="image/png" href="favicon.png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;800&display=swap" rel="stylesheet">
@@ -399,6 +400,32 @@
             border-radius: 4px;
         }
 
+        #properties-panel input[type="range"] {
+            -webkit-appearance: none;
+            appearance: none;
+            background: rgba(255, 255, 255, 0.1);
+            height: 6px;
+            border-radius: 3px;
+            outline: none;
+            accent-color: var(--accent);
+            width: 60px;
+        }
+
+        #properties-panel input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: var(--accent);
+            cursor: pointer;
+            transition: transform 0.1s ease;
+        }
+
+        #properties-panel input[type="range"]::-webkit-slider-thumb:hover {
+            transform: scale(1.2);
+        }
+
         #properties-panel .btn-widget {
             width: 32px;
             height: 32px;
@@ -502,6 +529,8 @@
             <span id="bg-color-label" style="display: none;"></span>
             <div class="prop-color-group" style="display: flex; gap: 6px; align-items: center;">
                 <input type="color" id="prop-bg-color" class="color-picker" title="Background Color">
+                <input type="range" id="prop-bg-opacity" min="0" max="100" value="100" title="Background Opacity" style="cursor: pointer;">
+                <span id="prop-bg-opacity-val" style="font-size: 0.75rem; width: 32px; text-align: right; color: var(--text-muted); font-family: monospace;">100%</span>
                 <input type="checkbox" id="prop-bg-transparent" title="Transparent Background">
             </div>
 

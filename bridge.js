@@ -554,6 +554,17 @@ function updatePropertiesPanel() {
         document.getElementById('prop-bg-transparent').checked = (bgA <= 0.001);
         document.getElementById('prop-bg-color').disabled = (bgA <= 0.001);
 
+        const bgOpacityPct = Math.round(bgA * 100);
+        const bgOpacitySlider = document.getElementById('prop-bg-opacity');
+        const bgOpacityVal = document.getElementById('prop-bg-opacity-val');
+        if (bgOpacitySlider && document.activeElement !== bgOpacitySlider) {
+            bgOpacitySlider.value = bgOpacityPct;
+            bgOpacitySlider.disabled = (bgA <= 0.001);
+        }
+        if (bgOpacityVal) {
+            bgOpacityVal.innerText = bgOpacityPct + "%";
+        }
+
         const hexBorder = rgbToHex(borderR, borderG, borderB);
         document.getElementById('prop-border-color').value = hexBorder;
         document.getElementById('prop-border-transparent').checked = (borderA <= 0.001);
@@ -613,10 +624,33 @@ function bindPropertiesPanelEvents() {
         const isTransparent = document.getElementById('prop-bg-transparent').checked;
         document.getElementById('prop-bg-color').disabled = isTransparent;
 
+        const opacitySlider = document.getElementById('prop-bg-opacity');
+        if (opacitySlider) {
+            opacitySlider.disabled = isTransparent;
+        }
+
         const hex = document.getElementById('prop-bg-color').value;
         const rgb = hexToRgb(hex);
         const type = wasmInstance.exports.get_node_type(idx);
-        const a = isTransparent ? 0.0 : ((type === 5 || type === 6) ? 1.0 : 0.9);
+
+        let a = 0.9;
+        if (isTransparent) {
+            a = 0.0;
+        } else if (opacitySlider) {
+            a = parseFloat(opacitySlider.value) / 100.0;
+            // If the background was transparent and is now toggled to opaque,
+            // we revert to a sensible default opacity (90% for shapes, 100% for lines)
+            if (a <= 0.001) {
+                a = ((type === 5 || type === 6) ? 1.0 : 0.9);
+                opacitySlider.value = Math.round(a * 100);
+                const bgOpacityVal = document.getElementById('prop-bg-opacity-val');
+                if (bgOpacityVal) {
+                    bgOpacityVal.innerText = opacitySlider.value + "%";
+                }
+            }
+        } else {
+            a = ((type === 5 || type === 6) ? 1.0 : 0.9);
+        }
 
         wasmInstance.exports.set_node_bg_color(idx, rgb.r, rgb.g, rgb.b, a);
         updateEditorStyle();
@@ -624,6 +658,29 @@ function bindPropertiesPanelEvents() {
 
     document.getElementById('prop-bg-color').addEventListener('input', updateBg);
     document.getElementById('prop-bg-transparent').addEventListener('change', updateBg);
+
+    const bgOpacitySlider = document.getElementById('prop-bg-opacity');
+    if (bgOpacitySlider) {
+        bgOpacitySlider.addEventListener('input', () => {
+            const val = bgOpacitySlider.value;
+            const bgOpacityVal = document.getElementById('prop-bg-opacity-val');
+            if (bgOpacityVal) {
+                bgOpacityVal.innerText = val + "%";
+            }
+
+            // Sync with transparent checkbox
+            const bgTransparentCheckbox = document.getElementById('prop-bg-transparent');
+            if (bgTransparentCheckbox) {
+                if (val > 0 && bgTransparentCheckbox.checked) {
+                    bgTransparentCheckbox.checked = false;
+                } else if (val == 0 && !bgTransparentCheckbox.checked) {
+                    bgTransparentCheckbox.checked = true;
+                }
+            }
+
+            updateBg();
+        });
+    }
 
     const updateBorder = () => {
         const idx = getSelected();
@@ -982,6 +1039,8 @@ function setupInputHandlers() {
     let isDrawMode = false;
     let isDrawingStroke = false;
     let isArrowMode = false;
+    let lastClientX = window.innerWidth / 2;
+    let lastClientY = window.innerHeight / 2;
 
     function toggleDrawMode(active) {
         isDrawMode = active;
@@ -1078,6 +1137,8 @@ function setupInputHandlers() {
     });
 
     window.addEventListener('mousemove', (e) => {
+        lastClientX = e.clientX;
+        lastClientY = e.clientY;
         if (isDrawMode && isDrawingStroke) {
             const wCoords = getWorldCoords(e.clientX, e.clientY);
             wasmInstance.exports.add_stroke_point(wCoords.x, wCoords.y);
@@ -1275,6 +1336,149 @@ function setupInputHandlers() {
             wasmInstance.exports.on_key_up(32);
         }
     });
+
+    window.addEventListener('copy', (e) => {
+        if (document.activeElement === editor) {
+            return;
+        }
+        const idx = wasmInstance.exports.get_selected_node_idx();
+        if (idx !== -1) {
+            const textPtr = wasmInstance.exports.get_node_text_ptr(idx);
+            const textContent = readNullTerminatedString(textPtr);
+            const data = {
+                _isDustNode: true,
+                type: wasmInstance.exports.get_node_type(idx),
+                w: wasmInstance.exports.get_node_width(idx),
+                h: wasmInstance.exports.get_node_height(idx),
+                bg_r: wasmInstance.exports.get_node_bg_r(idx),
+                bg_g: wasmInstance.exports.get_node_bg_g(idx),
+                bg_b: wasmInstance.exports.get_node_bg_b(idx),
+                bg_a: wasmInstance.exports.get_node_bg_a(idx),
+                border_r: wasmInstance.exports.get_node_border_r(idx),
+                border_g: wasmInstance.exports.get_node_border_g(idx),
+                border_b: wasmInstance.exports.get_node_border_b(idx),
+                border_a: wasmInstance.exports.get_node_border_a(idx),
+                text_r: wasmInstance.exports.get_node_text_r(idx),
+                text_g: wasmInstance.exports.get_node_text_g(idx),
+                text_b: wasmInstance.exports.get_node_text_b(idx),
+                font_size: wasmInstance.exports.get_node_font_size(idx),
+                texture_id: wasmInstance.exports.get_node_texture_id(idx),
+                text: textContent
+            };
+            e.clipboardData.setData('text/plain', JSON.stringify(data));
+            e.preventDefault();
+        }
+    });
+
+    window.addEventListener('paste', async (e) => {
+        if (document.activeElement === editor) {
+            return;
+        }
+
+        // 1. Try pasting an image from clipboard
+        const items = (e.clipboardData || e.originalEvent.clipboardData).items;
+        for (let i = 0; i < items.length; i++) {
+            if (items[i].type.indexOf('image') !== -1) {
+                const file = items[i].getAsFile();
+                await pasteImageFromClipboard(file);
+                e.preventDefault();
+                return;
+            }
+        }
+
+        // 2. Try pasting serialized Dust node data or plain text
+        const text = e.clipboardData.getData('text/plain');
+        if (text) {
+            try {
+                const data = JSON.parse(text);
+                if (data && data._isDustNode) {
+                    pasteNode(data);
+                    e.preventDefault();
+                    return;
+                }
+            } catch (err) {
+                // Not a Dust node JSON, fallback to text pasting
+            }
+            // Paste a text note with the clipboard content
+            pasteTextNode(text);
+            e.preventDefault();
+        }
+    });
+
+    async function pasteImageFromClipboard(file) {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            const img = new Image();
+            img.onload = () => {
+                const tempCanvas = document.createElement('canvas');
+                tempCanvas.width = img.width;
+                tempCanvas.height = img.height;
+                const tempCtx = tempCanvas.getContext('2d');
+                tempCtx.drawImage(img, 0, 0);
+                const imgData = tempCtx.getImageData(0, 0, img.width, img.height);
+
+                const imgMips = numMipLevels(img.width, img.height);
+                const texture = device.createTexture({
+                    size: [img.width, img.height],
+                    format: 'rgba8unorm',
+                    mipLevelCount: imgMips,
+                    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT
+                });
+
+                device.queue.writeTexture(
+                    { texture: texture },
+                    imgData.data,
+                    { bytesPerRow: img.width * 4 },
+                    [img.width, img.height]
+                );
+                generateMipmaps(texture, img.width, img.height);
+
+                const textureId = textures.length;
+                textures.push(texture);
+
+                const coords = getWorldCoords(lastClientX, lastClientY);
+                // 4 is WIDGET_IMAGE
+                wasmInstance.exports.add_widget_wasm(4, coords.x, coords.y, textureId, img.width, img.height);
+            };
+            img.src = event.target.result;
+        };
+        reader.readAsDataURL(file);
+    }
+
+    function pasteNode(data) {
+        const coords = getWorldCoords(lastClientX, lastClientY);
+        // Add slightly offset from cursor (or at cursor)
+        wasmInstance.exports.add_widget_wasm(data.type, coords.x, coords.y, data.texture_id, data.w, data.h);
+        
+        const newIdx = wasmInstance.exports.get_selected_node_idx();
+        if (newIdx !== -1) {
+            wasmInstance.exports.set_node_size(newIdx, data.w, data.h);
+            wasmInstance.exports.set_node_bg_color(newIdx, data.bg_r, data.bg_g, data.bg_b, data.bg_a);
+            wasmInstance.exports.set_node_border_color(newIdx, data.border_r, data.border_g, data.border_b, data.border_a);
+            wasmInstance.exports.set_node_text_color(newIdx, data.text_r, data.text_g, data.text_b);
+            wasmInstance.exports.set_node_font_size(newIdx, data.font_size);
+            if (data.text && data.text.length > 0) {
+                const textPtr = wasmInstance.exports.get_node_text_ptr(newIdx);
+                writeString(textPtr, 128, data.text);
+            }
+            wasmInstance.exports.mark_dirty_wasm();
+        }
+    }
+
+    function pasteTextNode(text) {
+        const coords = getWorldCoords(lastClientX, lastClientY);
+        // 3 is WIDGET_TEXT, -1 for texture_id, 0 for size (will default)
+        wasmInstance.exports.add_widget_wasm(3, coords.x, coords.y, -1, 0, 0);
+        
+        const newIdx = wasmInstance.exports.get_selected_node_idx();
+        if (newIdx !== -1) {
+            const textPtr = wasmInstance.exports.get_node_text_ptr(newIdx);
+            writeString(textPtr, 128, text);
+            // Default styling for pasted text: dark slate navy
+            wasmInstance.exports.set_node_text_color(newIdx, 30/255, 41/255, 59/255);
+            wasmInstance.exports.mark_dirty_wasm();
+        }
+    }
 
     document.getElementById('btn-bulk-create').addEventListener('click', () => {
         commitText();

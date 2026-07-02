@@ -667,6 +667,17 @@ __attribute__((visibility("default"))) void set_node_texture_id(int idx,
   }
 }
 
+__attribute__((visibility("default"))) const char* get_node_text_ptr(int idx) {
+  if (idx >= 0 && idx < (int)entity_count) {
+    return text_components[idx].text;
+  }
+  return "";
+}
+
+__attribute__((visibility("default"))) void mark_dirty_wasm() {
+  mark_dirty();
+}
+
 __attribute__((visibility("default"))) float get_node_bg_r(int idx) {
   if (idx < 0 || idx >= (int)entity_count)
     return 0.0f;
