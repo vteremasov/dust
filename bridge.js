@@ -179,21 +179,33 @@ function updateEditorStyle() {
     const N = lines.length;
     const paddingTop = Math.max(0, (sHeight - N * lineHeight) / 2);
 
+    const nodeType = wasmInstance.exports.get_node_type(idx);
+
     editor.style.fontSize = `${fontSize}px`;
     editor.style.lineHeight = `${lineHeight}px`;
     editor.style.paddingTop = `${paddingTop}px`;
-    editor.style.paddingLeft = `${10 * currentZoom}px`;
-    editor.style.paddingRight = `${10 * currentZoom}px`;
     editor.style.paddingBottom = '0px';
     editor.style.margin = '0px';
     editor.style.resize = 'none';
     editor.style.overflow = 'hidden';
     editor.style.color = textColor;
-    editor.style.fontFamily = "'Outfit', sans-serif";
-    editor.style.fontWeight = '500';
+    if (nodeType === 8) {
+        editor.style.fontFamily = "'Courier New', Courier, monospace";
+        editor.style.fontWeight = '400';
+        editor.style.textAlign = 'left';
+        const charAdv = 0.60 * wasmFontSize * currentZoom;
+        const padLeft = 15 * currentZoom + 5 * charAdv;
+        editor.style.paddingLeft = `${padLeft}px`;
+        editor.style.paddingRight = `${15 * currentZoom}px`;
+    } else {
+        editor.style.fontFamily = "'Outfit', sans-serif";
+        editor.style.fontWeight = '500';
+        editor.style.textAlign = 'center';
+        editor.style.paddingLeft = `${10 * currentZoom}px`;
+        editor.style.paddingRight = `${10 * currentZoom}px`;
+    }
     editor.style.fontKerning = 'none';
     editor.style.fontVariantLigatures = 'none';
-    editor.style.textAlign = 'center';
     editor.style.border = 'none';
     editor.style.background = 'transparent';
     editor.style.boxShadow = 'none';
@@ -521,8 +533,8 @@ function updatePropertiesPanel() {
         const bgColorLabel = document.getElementById('bg-color-label');
         const fontGroup = document.getElementById('font-group');
 
-        // Font size control visibility (WIDGET_STICKY, RECT, OVAL, TEXT can have text)
-        if (type <= 3 || type === 7) {
+        // Font size control visibility (WIDGET_STICKY, RECT, OVAL, TEXT, CODE can have text)
+        if (type <= 3 || type === 7 || type === 8) {
             fontGroup.style.display = 'flex';
             if (document.activeElement !== document.getElementById('prop-font-size')) {
                 document.getElementById('prop-font-size').value = Math.round(wasmFontSize);
@@ -1494,8 +1506,9 @@ function setupInputHandlers() {
             wasmInstance.exports.set_node_text_color(newIdx, data.text_r, data.text_g, data.text_b);
             wasmInstance.exports.set_node_font_size(newIdx, data.font_size);
             if (data.text && data.text.length > 0) {
-                const textPtr = wasmInstance.exports.get_node_text_ptr(newIdx);
-                writeString(textPtr, 128, data.text);
+                const tempBufPtr = wasmInstance.exports.get_temp_string_buffer();
+                writeString(tempBufPtr, 100000, data.text);
+                wasmInstance.exports.set_node_text(newIdx, tempBufPtr);
             }
             wasmInstance.exports.mark_dirty_wasm();
             saveStateDebounced();
@@ -1509,8 +1522,9 @@ function setupInputHandlers() {
         
         const newIdx = wasmInstance.exports.get_selected_node_idx();
         if (newIdx !== -1) {
-            const textPtr = wasmInstance.exports.get_node_text_ptr(newIdx);
-            writeString(textPtr, 128, text);
+            const tempBufPtr = wasmInstance.exports.get_temp_string_buffer();
+            writeString(tempBufPtr, 100000, text);
+            wasmInstance.exports.set_node_text(newIdx, tempBufPtr);
             // Default styling for pasted text: dark slate navy
             wasmInstance.exports.set_node_text_color(newIdx, 30/255, 41/255, 59/255);
             wasmInstance.exports.mark_dirty_wasm();
@@ -1556,6 +1570,13 @@ function setupInputHandlers() {
         commitText();
         const center = getScreenCenterInWorld();
         wasmInstance.exports.add_widget_wasm(3, center.x, center.y, -1, 0, 0);
+        saveStateDebounced();
+    });
+
+    document.getElementById('btn-add-code').addEventListener('click', () => {
+        commitText();
+        const center = getScreenCenterInWorld();
+        wasmInstance.exports.add_widget_wasm(8, center.x, center.y, -1, 0, 0);
         saveStateDebounced();
     });
 
@@ -1623,15 +1644,10 @@ function setupInputHandlers() {
     });
 
     document.getElementById('btn-clear').addEventListener('click', () => {
-        console.log("Clear Board button clicked in JS!");
+        console.log("Clear Board button clicked in JS! Clearing local storage and reloading...");
         commitText();
-        try {
-            wasmInstance.exports.on_btn_clear_click();
-            console.log("on_btn_clear_click finished calling WASM");
-            saveStateDebounced();
-        } catch (e) {
-            console.error("WASM on_btn_clear_click crashed:", e);
-        }
+        localStorage.clear();
+        location.reload();
     });
 
     const btnToggleDebug = document.getElementById('btn-toggle-debug');
@@ -1826,7 +1842,7 @@ async function loadState() {
                 // Normal node
                 const text = ent.text || "";
                 const tempBufPtr = wasmInstance.exports.get_temp_string_buffer();
-                writeString(tempBufPtr, 256, text);
+                writeString(tempBufPtr, 100000, text);
                 const newIdx = wasmInstance.exports.recreate_node(
                     ent.type, ent.x, ent.y, ent.w, ent.h,
                     ent.bg_r, ent.bg_g, ent.bg_b, ent.bg_a,

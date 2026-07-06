@@ -294,6 +294,7 @@ int is_unicode_supported(uint32_t cp) {
     if (cp >= 8192 && cp <= 8303) return 1;
     if (cp >= 8352 && cp <= 8399) return 1;
     if (cp >= 8592 && cp <= 9215) return 1;
+    if (cp >= 0xE000 && cp <= 0xE07E) return 1;
     return 0;
 }
 
@@ -369,6 +370,45 @@ int main() {
         fclose(f_fallback);
     }
 
+    const char *mono_paths[] = {
+        "/System/Library/Fonts/Supplemental/Courier New.ttf",
+        "/System/Library/Fonts/Courier.ttc",
+        "/System/Library/Fonts/Supplemental/PTMono.ttc",
+        "/System/Library/Fonts/Supplemental/Andale Mono.ttf",
+        "/usr/share/fonts/TTF/LiberationMono-Regular.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+        "C:\\Windows\\Fonts\\cour.ttf"
+    };
+    FILE *f_mono = NULL;
+    for (int i = 0; i < sizeof(mono_paths)/sizeof(mono_paths[0]); i++) {
+        f_mono = fopen(mono_paths[i], "rb");
+        if (f_mono) {
+            fprintf(stderr, "Using monospace font: %s\n", mono_paths[i]);
+            break;
+        }
+    }
+    unsigned char *mono_font_buffer = NULL;
+    stbtt_fontinfo mono_info;
+    int has_mono = 0;
+    float mono_scale = 0.0f;
+
+    if (f_mono) {
+        fseek(f_mono, 0, SEEK_END);
+        long mono_size = ftell(f_mono);
+        fseek(f_mono, 0, SEEK_SET);
+        mono_font_buffer = malloc(mono_size);
+        if (mono_font_buffer) {
+            fread(mono_font_buffer, 1, mono_size, f_mono);
+            int mono_offset = stbtt_GetFontOffsetForIndex(mono_font_buffer, 0);
+            if (mono_offset >= 0 && stbtt_InitFont(&mono_info, mono_font_buffer, mono_offset)) {
+                has_mono = 1;
+                mono_scale = stbtt_ScaleForPixelHeight(&mono_info, FONT_SIZE);
+            }
+        }
+        fclose(f_mono);
+    }
+
     memset(atlas_pixels, 0, sizeof(atlas_pixels));
     float scale = stbtt_ScaleForPixelHeight(&info, FONT_SIZE);
 
@@ -393,17 +433,30 @@ int main() {
 
         stbtt_fontinfo *active_info = &info;
         float active_scale = scale;
-        int glyph_index = stbtt_FindGlyphIndex(active_info, cp);
+        uint32_t font_cp = cp;
+        int is_mono = 0;
 
-        if (glyph_index == 0 && has_fallback) {
-            glyph_index = stbtt_FindGlyphIndex(&fallback_info, cp);
+        if (cp >= 0xE000 && cp <= 0xE07E) {
+            if (!has_mono) {
+                continue;
+            }
+            active_info = &mono_info;
+            active_scale = mono_scale;
+            font_cp = cp - 0xE000;
+            is_mono = 1;
+        }
+
+        int glyph_index = stbtt_FindGlyphIndex(active_info, font_cp);
+
+        if (glyph_index == 0 && !is_mono && has_fallback) {
+            glyph_index = stbtt_FindGlyphIndex(&fallback_info, font_cp);
             if (glyph_index != 0) {
                 active_info = &fallback_info;
                 active_scale = fallback_scale;
             }
         }
 
-        if (glyph_index == 0 && cp != 32 && cp != 160) {
+        if (glyph_index == 0 && font_cp != 32 && font_cp != 160) {
             continue; // Not found and not space
         }
 
@@ -420,7 +473,7 @@ int main() {
         int cellY = row * CELL_H;
 
         int advanceWidth, leftSideBearing;
-        stbtt_GetCodepointHMetrics(active_info, cp, &advanceWidth, &leftSideBearing);
+        stbtt_GetCodepointHMetrics(active_info, font_cp, &advanceWidth, &leftSideBearing);
         float advance = (float)advanceWidth * active_scale / FONT_SIZE;
 
         // Save glyph info
@@ -430,7 +483,7 @@ int main() {
         font_glyphs_count++;
 
         stbtt_vertex *vertices = NULL;
-        int num_vertices = stbtt_GetCodepointShape(active_info, cp, &vertices);
+        int num_vertices = stbtt_GetCodepointShape(active_info, font_cp, &vertices);
 
         if (num_vertices > 0) {
             int num_contours = 0;
@@ -583,11 +636,13 @@ int main() {
         fprintf(stderr, "Error: Failed to write complete font_atlas.png\n");
         free(font_buffer);
         if (fallback_font_buffer) free(fallback_font_buffer);
+        if (mono_font_buffer) free(mono_font_buffer);
         return 1;
     }
 
     free(font_buffer);
     if (fallback_font_buffer) free(fallback_font_buffer);
+    if (mono_font_buffer) free(mono_font_buffer);
 
     // Diagnostic: horizontal scan of 'O' atlas at mid-glyph
     {

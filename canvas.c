@@ -45,6 +45,7 @@ WASM_IMPORT("js_wgpu_end_render_pass") void js_wgpu_end_render_pass();
 #include "systems.h"
 
 void add_widget_wasm(int type, float x, float y, int texture_id, int img_w, int img_h);
+const char* get_node_text_ptr(int idx);
 
 #define NULL ((void *)0)
 
@@ -309,7 +310,7 @@ on_mouse_down(int button, float x, float y, int shift, int ctrl) {
 
       js_set_editing_state(1, sx, sy, transform_components[hit_node_idx].w,
                            transform_components[hit_node_idx].h,
-                           text_components[hit_node_idx].text, 120,
+                           get_node_text_ptr(hit_node_idx), 100000,
                            hit_node_idx);
 
       is_dragging_node = 0;
@@ -659,19 +660,37 @@ __attribute__((visibility("default"))) int get_node_texture_id(int idx) {
   return render_components[idx].texture_id;
 }
 
+static char edit_buffer[100005];
+
+__attribute__((visibility("default"))) const char* get_node_text_ptr(int idx) {
+  if (idx < 0 || idx >= (int)entity_count)
+    return NULL;
+  const char *src = text_components[idx].text;
+  if (!src) src = "";
+  unsigned int i = 0;
+  while (src[i] != '\0' && i < 100000) {
+    edit_buffer[i] = src[i];
+    i++;
+  }
+  edit_buffer[i] = '\0';
+  return edit_buffer;
+}
+
+__attribute__((visibility("default"))) void set_node_text(int idx, const char *text) {
+  if (idx >= 0 && idx < (int)entity_count && ecs_has_component(idx, COMP_TEXT)) {
+    if (!text) text = "";
+    unsigned int len = strlen(text);
+    text_components[idx].text = allocate_text(text, len);
+    mark_dirty();
+  }
+}
+
 __attribute__((visibility("default"))) void set_node_texture_id(int idx,
                                                                 int tex_id) {
   if (idx >= 0 && idx < (int)entity_count) {
     render_components[idx].texture_id = tex_id;
     mark_dirty();
   }
-}
-
-__attribute__((visibility("default"))) const char* get_node_text_ptr(int idx) {
-  if (idx >= 0 && idx < (int)entity_count) {
-    return text_components[idx].text;
-  }
-  return "";
 }
 
 __attribute__((visibility("default"))) void mark_dirty_wasm() {
@@ -1127,6 +1146,8 @@ __attribute__((visibility("default"))) void set_arrow_tool(int active) {
 
 __attribute__((visibility("default"))) void on_text_commit() {
   if (editing_node_idx != -1) {
+    unsigned int len = strlen(edit_buffer);
+    text_components[editing_node_idx].text = allocate_text(edit_buffer, len);
     js_init_node_texture(editing_node_idx,
                          text_components[editing_node_idx].text,
                          render_components[editing_node_idx].type,
@@ -1163,6 +1184,10 @@ add_widget_wasm(int type, float x, float y, int texture_id, int img_w,
     h = 30.0f;
   } else if (type == WIDGET_TRIANGLE) {
     default_text = "Triangle";
+  } else if (type == WIDGET_CODE) {
+    default_text = "int main() {\n  return 0;\n}";
+    w = 250.0f;
+    h = 180.0f;
   } else if (type == WIDGET_IMAGE) {
     float aspect = (float)img_w / (float)img_h;
     if (img_w > img_h) {
@@ -1552,7 +1577,7 @@ static char *canvas_strncpy(char *dest, const char *src, int n) {
   return dest;
 }
 
-static char temp_string_buffer[256];
+static char temp_string_buffer[100005];
 
 __attribute__((visibility("default"))) char* get_temp_string_buffer() {
   return temp_string_buffer;
@@ -1573,7 +1598,7 @@ __attribute__((visibility("default"))) int recreate_node(int type, float x, floa
   transform_components[e].h = h;
 
   ecs_add_component(e, COMP_RENDER);
-  render_components[e].type = type;
+  render_components[e].type = (WidgetType)type;
   render_components[e].bg_r = bg_r;
   render_components[e].bg_g = bg_g;
   render_components[e].bg_b = bg_b;
@@ -1589,7 +1614,9 @@ __attribute__((visibility("default"))) int recreate_node(int type, float x, floa
   render_components[e].texture_id = texture_id;
 
   ecs_add_component(e, COMP_TEXT);
-  canvas_strncpy(text_components[e].text, text, 128);
+  if (!text) text = "";
+  unsigned int text_len = strlen(text);
+  text_components[e].text = allocate_text(text, text_len);
 
   ecs_add_component(e, COMP_INTERACTION);
   interaction_components[e].selected = 0;

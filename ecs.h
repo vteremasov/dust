@@ -1,7 +1,7 @@
 #ifndef ECS_H
 #define ECS_H
 
-#define MAX_ENTITIES 2700000
+#define MAX_ENTITIES 200000
 #define MAX_PATH_POINTS 20000
 
 #ifndef NULL
@@ -16,7 +16,8 @@ typedef enum {
   WIDGET_IMAGE = 4,
   WIDGET_PATH = 5,
   WIDGET_ARROW = 6,
-  WIDGET_TRIANGLE = 7
+  WIDGET_TRIANGLE = 7,
+  WIDGET_CODE = 8
 } WidgetType;
 
 typedef struct {
@@ -50,8 +51,11 @@ typedef struct {
 } RenderComponent;
 
 typedef struct {
-  char text[128];
+  const char *text;
 } TextComponent;
+
+char *allocate_text(const char *src, unsigned int len);
+void reset_text_heap();
 
 typedef struct {
   int path_start_idx;

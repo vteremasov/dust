@@ -12,9 +12,32 @@ InteractionComponent interaction_components[MAX_ENTITIES];
 PathPoint path_points[MAX_PATH_POINTS];
 int path_point_count = 0;
 
+#define TEXT_HEAP_SIZE (24 * 1024 * 1024)
+static char text_heap[TEXT_HEAP_SIZE];
+static unsigned int text_heap_offset = 0;
+
+void reset_text_heap() {
+  text_heap_offset = 0;
+  text_heap[0] = '\0';
+}
+
+char *allocate_text(const char *src, unsigned int len) {
+  if (text_heap_offset + len + 1 > TEXT_HEAP_SIZE) {
+    return "";
+  }
+  char *dest = &text_heap[text_heap_offset];
+  for (unsigned int i = 0; i < len; i++) {
+    dest[i] = src[i];
+  }
+  dest[len] = '\0';
+  text_heap_offset += len + 1;
+  return dest;
+}
+
 void ecs_init() {
   entity_count = 0;
   path_point_count = 0;
+  reset_text_heap();
 }
 
 Entity ecs_create_entity() {
@@ -45,7 +68,7 @@ Entity ecs_create_entity() {
   render_components[e].font_size = 18.0f;
   render_components[e].texture_id = -1;
   
-  text_components[e].text[0] = '\0';
+  text_components[e].text = "";
   
   path_components[e].path_start_idx = 0;
   path_components[e].path_point_len = 0;

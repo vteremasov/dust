@@ -153,79 +153,271 @@ static void draw_image_rect(float x, float y, float w, float h, float alpha) {
   push_index(start_idx + 3);
 }
 
+static int is_alphanumeric(unsigned int cp) {
+  return (cp >= 'a' && cp <= 'z') || (cp >= 'A' && cp <= 'Z') || (cp >= '0' && cp <= '9') || (cp == '_');
+}
+
 static void draw_widget_text_content(Entity e, float tx_offset_y, float char_w, float char_h, float tr, float tg, float tb, float ta) {
   if (!ecs_has_component(e, COMP_TEXT)) return;
   const char *text = text_components[e].text;
-  int len = local_strlen(text);
-  if (len <= 0) return;
+  if (!text || text[0] == '\0') return;
+
+  RenderComponent *r = &render_components[e];
 
   float cell_size = char_w * (64.0f / 38.0f);
   float line_spacing = char_h * 0.2f;
 
-  int line_starts[32];
-  int line_lens[32];
-  int num_lines = 0;
-
-  int curr_start = 0;
-  int curr_len = 0;
-  for (int j = 0; ; j++) {
-    char c = text[j];
-    if (c == '\n' || c == '\0') {
-      if (num_lines < 32) {
-        line_starts[num_lines] = curr_start;
-        line_lens[num_lines] = curr_len;
-        num_lines++;
-      }
-      if (c == '\0') {
-        break;
-      }
-      curr_start = j + 1;
-      curr_len = 0;
-    } else if (c != '\r') {
-      curr_len++;
+  // 1. Pre-pass to count total lines so we can compute total_text_h for vertical alignment
+  int num_lines = 1;
+  for (int j = 0; text[j] != '\0'; j++) {
+    if (text[j] == '\n') {
+      num_lines++;
     }
   }
 
   TransformComponent *t = &transform_components[e];
   float total_text_h = char_h + (num_lines - 1) * (char_h + line_spacing);
   float start_ty = t->y + (t->h - total_text_h) / 2.0f + tx_offset_y;
+  if (r->type == WIDGET_CODE) {
+    if (total_text_h > t->h - 20.0f) {
+      start_ty = t->y + 15.0f + tx_offset_y;
+    }
+  }
 
-  for (int l = 0; l < num_lines; l++) {
-    int l_start = line_starts[l];
-    int l_len = line_lens[l];
-    
-    // Decoded codepoints and advances cache
-    unsigned int line_cps[512];
-    float line_advs[512];
+  // 2. Iterate and draw line by line on the fly
+  float ty = start_ty;
+  int j = 0;
+  int line_num = 1;
+  while (text[j] != '\0') {
+    unsigned int line_cps[2048];
     int line_cp_count = 0;
-    
     float total_w = 0.0f;
-    const char *ptr = text + l_start;
-    const char *line_end = ptr + l_len;
-    while (ptr < line_end && line_cp_count < 512) {
+
+    // Parse one line (until \n or \0)
+    while (text[j] != '\0' && text[j] != '\n') {
+      if (text[j] == '\r') {
+        j++;
+        continue;
+      }
+      
+      const char *ptr = &text[j];
       unsigned int cp = decode_utf8(&ptr);
-      if (cp != '\r') {
-        float adv = get_char_advance(cp) * char_w;
-        line_cps[line_cp_count] = cp;
-        line_advs[line_cp_count] = adv;
-        line_cp_count++;
-        total_w += adv;
+      int consumed = ptr - &text[j];
+      j += consumed;
+
+      if (cp == '\t') {
+        // Expand tabs to 4 spaces
+        int spaces = 4;
+        for (int s = 0; s < spaces && line_cp_count < 2048; s++) {
+          line_cps[line_cp_count++] = ' ';
+          unsigned int lookup_cp = ' ';
+          if (r->type == WIDGET_CODE) lookup_cp = ' ' + 0xE000;
+          total_w += get_char_advance(lookup_cp) * char_w;
+        }
+      } else if (line_cp_count < 2048) {
+        line_cps[line_cp_count++] = cp;
+        unsigned int lookup_cp = cp;
+        if (r->type == WIDGET_CODE && cp >= 32 && cp <= 126) {
+          lookup_cp = cp + 0xE000;
+        }
+        total_w += get_char_advance(lookup_cp) * char_w;
       }
     }
-    
-    float tx = t->x + (t->w - total_w) / 2.0f;
-    float ty = start_ty + l * (char_h + line_spacing);
 
-    // Draw each character in the range using cached layout and decoding
+    if (text[j] == '\n') {
+      j++;
+    }
+
+    // Centered or left-aligned horizontal position
+    float tx = t->x + (t->w - total_w) / 2.0f;
+    if (r->type == WIDGET_CODE) {
+      char num_str[8];
+      int temp = line_num;
+      int digit_count = 0;
+      if (temp == 0) {
+        num_str[0] = '0';
+        digit_count = 1;
+      } else {
+        char rev[8];
+        while (temp > 0 && digit_count < 6) {
+          rev[digit_count++] = '0' + (temp % 10);
+          temp /= 10;
+        }
+        for (int k = 0; k < digit_count; k++) {
+          num_str[k] = rev[digit_count - 1 - k];
+        }
+      }
+      num_str[digit_count] = '\0';
+
+      float mono_adv = get_char_advance('A' + 0xE000) * char_w;
+      float num_x = t->x + 15.0f;
+      int start_col = 3 - digit_count;
+      if (start_col < 0) start_col = 0;
+
+      for (int col = 0; col < 3; col++) {
+        if (col >= start_col) {
+          char dig = num_str[col - start_col];
+          unsigned int draw_cp = dig + 0xE000;
+          float x_pos = num_x - cell_size * (24.0f / 64.0f);
+          float y_pos = ty - cell_size * (46.0f / 64.0f) + char_h * 0.75f;
+          draw_char(draw_cp, x_pos, y_pos, cell_size, cell_size, 0.45f, 0.45f, 0.50f, ta);
+        }
+        num_x += mono_adv;
+      }
+
+      // Draw vertical separator
+      {
+        unsigned int draw_cp = '|' + 0xE000;
+        float x_pos = num_x - cell_size * (24.0f / 64.0f);
+        float y_pos = ty - cell_size * (46.0f / 64.0f) + char_h * 0.75f;
+        draw_char(draw_cp, x_pos, y_pos, cell_size, cell_size, 0.30f, 0.30f, 0.35f, ta);
+        num_x += mono_adv;
+      }
+
+      num_x += mono_adv; // Space
+      tx = num_x;
+    }
+
+    // Colorize arrays for syntax highlighting
+    float cp_r[2048];
+    float cp_g[2048];
+    float cp_b[2048];
+    for (int i = 0; i < line_cp_count; i++) {
+      cp_r[i] = tr;
+      cp_g[i] = tg;
+      cp_b[i] = tb;
+    }
+
+    if (r->type == WIDGET_CODE) {
+      int in_string = 0;
+      char string_char = 0;
+      for (int i = 0; i < line_cp_count; ) {
+        // 1. Check for single line comment
+        if (!in_string && i + 1 < line_cp_count && line_cps[i] == '/' && line_cps[i+1] == '/') {
+          for (int k = i; k < line_cp_count; k++) {
+            cp_r[k] = 0.45f;
+            cp_g[k] = 0.55f;
+            cp_b[k] = 0.45f;
+          }
+          break; // Comment goes to end of line
+        }
+        
+        // 2. Check for string
+        if (in_string) {
+          cp_r[i] = 0.80f;
+          cp_g[i] = 0.85f;
+          cp_b[i] = 0.45f;
+          if (line_cps[i] == string_char) {
+            in_string = 0;
+          }
+          i++;
+          continue;
+        } else if (line_cps[i] == '"' || line_cps[i] == '\'') {
+          in_string = 1;
+          string_char = line_cps[i];
+          cp_r[i] = 0.80f;
+          cp_g[i] = 0.85f;
+          cp_b[i] = 0.45f;
+          i++;
+          continue;
+        }
+        
+        // 3. Check for word (identifiers / keywords / numbers)
+        if (is_alphanumeric(line_cps[i])) {
+          int start = i;
+          while (i < line_cp_count && is_alphanumeric(line_cps[i])) {
+            i++;
+          }
+          int end = i;
+          
+          // Check if it's a number (all digits)
+          int is_number = 1;
+          for (int k = start; k < end; k++) {
+            if (!(line_cps[k] >= '0' && line_cps[k] <= '9')) {
+              is_number = 0;
+              break;
+            }
+          }
+          
+          if (is_number) {
+            for (int k = start; k < end; k++) {
+              cp_r[k] = 0.40f;
+              cp_g[k] = 0.75f;
+              cp_b[k] = 0.95f;
+            }
+          } else {
+            // Check if it's a keyword
+            char word[64];
+            int w_len = end - start;
+            if (w_len < 64) {
+              for (int k = 0; k < w_len; k++) {
+                word[k] = (char)line_cps[start + k];
+              }
+              word[w_len] = '\0';
+              
+              int is_keyword = 0;
+              const char *keywords[] = {
+                "int", "void", "function", "const", "char", "float", "double", "short", "long", 
+                "unsigned", "signed", "struct", "class", "typedef", "union", "enum", "return", 
+                "if", "else", "for", "while", "do", "switch", "case", "break", "continue", 
+                "default", "goto", "static", "extern", "inline", "bool", "true", "false", "let", "var"
+              };
+              for (int kw = 0; kw < sizeof(keywords)/sizeof(keywords[0]); kw++) {
+                int match = 1;
+                const char *kw_str = keywords[kw];
+                int kw_len = 0;
+                while (kw_str[kw_len] != '\0') kw_len++;
+                if (kw_len != w_len) {
+                  match = 0;
+                } else {
+                  for (int ch = 0; ch < w_len; ch++) {
+                    if (word[ch] != kw_str[ch]) {
+                      match = 0;
+                      break;
+                    }
+                  }
+                }
+                if (match) {
+                  is_keyword = 1;
+                  break;
+                }
+              }
+              
+              if (is_keyword) {
+                for (int k = start; k < end; k++) {
+                  cp_r[k] = 0.92f;
+                  cp_g[k] = 0.40f;
+                  cp_b[k] = 0.65f;
+                }
+              }
+            }
+          }
+        } else {
+          i++;
+        }
+      }
+    }
+
+    // Draw characters for this line
     float cur_x = tx;
     for (int i = 0; i < line_cp_count; i++) {
       unsigned int cp = line_cps[i];
-      float advance = line_advs[i];
+      unsigned int draw_cp = cp;
+      if (r->type == WIDGET_CODE && cp >= 32 && cp <= 126) {
+        draw_cp = cp + 0xE000;
+      }
+      float advance = get_char_advance(draw_cp) * char_w;
       float x_pos = cur_x - cell_size * (24.0f / 64.0f);
       float y_pos = ty - cell_size * (46.0f / 64.0f) + char_h * 0.75f;
-      draw_char(cp, x_pos, y_pos, cell_size, cell_size, tr, tg, tb, ta);
+      
+      if (draw_cp != 32 && draw_cp != 160 && draw_cp != 0xE020 && draw_cp != 0xE0A0) {
+        draw_char(draw_cp, x_pos, y_pos, cell_size, cell_size, cp_r[i], cp_g[i], cp_b[i], ta);
+      }
       cur_x += advance;
     }
+
+    ty += char_h + line_spacing;
+    line_num++;
   }
 }
 
@@ -245,7 +437,7 @@ static void draw_entity(Entity e, int is_editing, int default_texture_id) {
     if (r->border_a > 0.001f) {
       draw_rect_border(t->x, t->y, t->w, t->h, 2.0f, r->border_r, r->border_g, r->border_b, r->border_a);
     }
-  } else if (r->type == WIDGET_RECT) {
+  } else if (r->type == WIDGET_RECT || r->type == WIDGET_CODE) {
     if (r->bg_a > 0.001f) {
       draw_rect(t->x, t->y, t->w, t->h, r->bg_r, r->bg_g, r->bg_b, r->bg_a);
     }
@@ -306,11 +498,6 @@ static void draw_entity(Entity e, int is_editing, int default_texture_id) {
     float tr = r->r;
     float tg = r->g;
     float tb = r->b;
-    if (r->type == WIDGET_TEXT) {
-      tr = r->bg_r;
-      tg = r->bg_g;
-      tb = r->bg_b;
-    }
     float char_h = r->font_size;
     float char_w = r->font_size;
     
