@@ -1487,3 +1487,189 @@ __attribute__((visibility("default"))) int get_debug_vertex_count() {
 __attribute__((visibility("default"))) int get_debug_index_count() {
   return index_count;
 }
+
+__attribute__((visibility("default"))) int get_entity_mask(int idx) {
+  if (idx < 0 || idx >= (int)entity_count) return 0;
+  return (int)entity_masks[idx];
+}
+
+__attribute__((visibility("default"))) int get_connection_from(int idx) {
+  if (idx < 0 || idx >= (int)entity_count) return -1;
+  return connection_components[idx].from_entity;
+}
+
+__attribute__((visibility("default"))) int get_connection_to(int idx) {
+  if (idx < 0 || idx >= (int)entity_count) return -1;
+  return connection_components[idx].to_entity;
+}
+
+__attribute__((visibility("default"))) int get_path_start_idx(int idx) {
+  if (idx < 0 || idx >= (int)entity_count) return -1;
+  return path_components[idx].path_start_idx;
+}
+
+__attribute__((visibility("default"))) int get_path_point_len(int idx) {
+  if (idx < 0 || idx >= (int)entity_count) return -1;
+  return path_components[idx].path_point_len;
+}
+
+__attribute__((visibility("default"))) float get_path_point_x(int pt_idx) {
+  if (pt_idx < 0 || pt_idx >= path_point_count) return 0.0f;
+  return path_points[pt_idx].x;
+}
+
+__attribute__((visibility("default"))) float get_path_point_y(int pt_idx) {
+  if (pt_idx < 0 || pt_idx >= path_point_count) return 0.0f;
+  return path_points[pt_idx].y;
+}
+
+__attribute__((visibility("default"))) float get_camera_pan_x() {
+  return uniforms.pan_x;
+}
+
+__attribute__((visibility("default"))) float get_camera_pan_y() {
+  return uniforms.pan_y;
+}
+
+__attribute__((visibility("default"))) float get_camera_zoom() {
+  return uniforms.zoom;
+}
+
+__attribute__((visibility("default"))) void set_camera_pan_zoom(float pan_x, float pan_y, float zoom) {
+  uniforms.pan_x = pan_x;
+  uniforms.pan_y = pan_y;
+  uniforms.zoom = zoom;
+  mark_dirty();
+}
+
+static char *canvas_strncpy(char *dest, const char *src, int n) {
+  int i = 0;
+  while (i < n - 1 && src[i] != '\0') {
+    dest[i] = src[i];
+    i++;
+  }
+  dest[i] = '\0';
+  return dest;
+}
+
+static char temp_string_buffer[256];
+
+__attribute__((visibility("default"))) char* get_temp_string_buffer() {
+  return temp_string_buffer;
+}
+
+__attribute__((visibility("default"))) int recreate_node(int type, float x, float y, float w, float h,
+                                                         float bg_r, float bg_g, float bg_b, float bg_a,
+                                                         float border_r, float border_g, float border_b, float border_a,
+                                                         float r, float g, float b, float font_size, int texture_id,
+                                                         const char *text) {
+  Entity e = ecs_create_entity();
+  if (e == (Entity)-1) return -1;
+
+  ecs_add_component(e, COMP_TRANSFORM);
+  transform_components[e].x = x;
+  transform_components[e].y = y;
+  transform_components[e].w = w;
+  transform_components[e].h = h;
+
+  ecs_add_component(e, COMP_RENDER);
+  render_components[e].type = type;
+  render_components[e].bg_r = bg_r;
+  render_components[e].bg_g = bg_g;
+  render_components[e].bg_b = bg_b;
+  render_components[e].bg_a = bg_a;
+  render_components[e].border_r = border_r;
+  render_components[e].border_g = border_g;
+  render_components[e].border_b = border_b;
+  render_components[e].border_a = border_a;
+  render_components[e].r = r;
+  render_components[e].g = g;
+  render_components[e].b = b;
+  render_components[e].font_size = font_size;
+  render_components[e].texture_id = texture_id;
+
+  ecs_add_component(e, COMP_TEXT);
+  canvas_strncpy(text_components[e].text, text, 128);
+
+  ecs_add_component(e, COMP_INTERACTION);
+  interaction_components[e].selected = 0;
+  interaction_components[e].is_dragging = 0;
+
+  mark_dirty();
+  return (int)e;
+}
+
+__attribute__((visibility("default"))) int recreate_connection(int from_entity, int to_entity,
+                                                               float r, float g, float b) {
+  Entity e = ecs_create_entity();
+  if (e == (Entity)-1) return -1;
+
+  ecs_add_component(e, COMP_RENDER);
+  render_components[e].type = WIDGET_ARROW;
+  render_components[e].texture_id = -1;
+  render_components[e].r = r;
+  render_components[e].g = g;
+  render_components[e].b = b;
+  render_components[e].bg_r = r;
+  render_components[e].bg_g = g;
+  render_components[e].bg_b = b;
+  render_components[e].bg_a = 1.0f;
+  render_components[e].border_r = r;
+  render_components[e].border_g = g;
+  render_components[e].border_b = b;
+  render_components[e].border_a = 1.0f;
+
+  ecs_add_component(e, COMP_CONNECTION);
+  connection_components[e].from_entity = from_entity;
+  connection_components[e].to_entity = to_entity;
+
+  ecs_add_component(e, COMP_INTERACTION);
+  interaction_components[e].selected = 0;
+  interaction_components[e].is_dragging = 0;
+
+  mark_dirty();
+  return (int)e;
+}
+
+__attribute__((visibility("default"))) int recreate_path(float x, float y, float w, float h,
+                                                         float r, float g, float b) {
+  Entity e = ecs_create_entity();
+  if (e == (Entity)-1) return -1;
+
+  ecs_add_component(e, COMP_RENDER);
+  render_components[e].type = WIDGET_PATH;
+  render_components[e].r = r;
+  render_components[e].g = g;
+  render_components[e].b = b;
+  render_components[e].bg_r = r;
+  render_components[e].bg_g = g;
+  render_components[e].bg_b = b;
+  render_components[e].bg_a = 1.0f;
+  render_components[e].texture_id = -1;
+
+  ecs_add_component(e, COMP_PATH);
+  path_components[e].path_start_idx = path_point_count;
+  path_components[e].path_point_len = 0;
+
+  ecs_add_component(e, COMP_TRANSFORM);
+  transform_components[e].x = x;
+  transform_components[e].y = y;
+  transform_components[e].w = w;
+  transform_components[e].h = h;
+
+  ecs_add_component(e, COMP_INTERACTION);
+  interaction_components[e].selected = 0;
+  interaction_components[e].is_dragging = 0;
+
+  mark_dirty();
+  return (int)e;
+}
+
+__attribute__((visibility("default"))) void recreate_path_point(int path_entity, float px, float py) {
+  if (path_point_count < MAX_PATH_POINTS) {
+    path_points[path_point_count] = (PathPoint){px, py};
+    path_point_count++;
+    path_components[path_entity].path_point_len++;
+  }
+  mark_dirty();
+}

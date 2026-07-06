@@ -21,6 +21,7 @@ let msaaTexture = null;
 const buffers = [];
 const textures = [];
 const pipelines = [];
+const uploadedImageDataUrls = [];
 
 let wasmInstance = null;
 let wasmMemory = null;
@@ -332,6 +333,7 @@ const importObject = {
             });
             const id = textures.length;
             textures.push(tex);
+            uploadedImageDataUrls.push(null);
             return id;
         },
         js_wgpu_write_buffer: (buffer_id, offset, data_ptr, size) => {
@@ -403,6 +405,7 @@ function commitText() {
         writeString(ptr, maxLen, editor.value.replace(/\r/g, ''));
         editor.style.display = 'none';
         wasmInstance.exports.on_text_commit();
+        saveStateDebounced();
     }
 }
 
@@ -595,6 +598,7 @@ function bindPropertiesPanelEvents() {
         const h = parseFloat(document.getElementById('prop-h').value) || 20;
         wasmInstance.exports.set_node_size(idx, w, h);
         updateEditorStyle();
+        saveStateDebounced();
     };
 
     document.getElementById('prop-w').addEventListener('input', updateSize);
@@ -606,6 +610,7 @@ function bindPropertiesPanelEvents() {
         const size = parseFloat(document.getElementById('prop-font-size').value) || 18;
         wasmInstance.exports.set_node_font_size(idx, size);
         updateEditorStyle();
+        saveStateDebounced();
     });
 
     document.getElementById('prop-font-color').addEventListener('input', () => {
@@ -615,6 +620,7 @@ function bindPropertiesPanelEvents() {
         const rgb = hexToRgb(hex);
         wasmInstance.exports.set_node_text_color(idx, rgb.r, rgb.g, rgb.b);
         updateEditorStyle();
+        saveStateDebounced();
     });
 
     const updateBg = () => {
@@ -654,6 +660,7 @@ function bindPropertiesPanelEvents() {
 
         wasmInstance.exports.set_node_bg_color(idx, rgb.r, rgb.g, rgb.b, a);
         updateEditorStyle();
+        saveStateDebounced();
     };
 
     document.getElementById('prop-bg-color').addEventListener('input', updateBg);
@@ -694,6 +701,7 @@ function bindPropertiesPanelEvents() {
         const a = isNone ? 0.0 : 1.0;
 
         wasmInstance.exports.set_node_border_color(idx, rgb.r, rgb.g, rgb.b, a);
+        saveStateDebounced();
     };
 
     document.getElementById('prop-border-color').addEventListener('input', updateBorder);
@@ -701,22 +709,34 @@ function bindPropertiesPanelEvents() {
 
     document.getElementById('btn-z-front').addEventListener('click', () => {
         const idx = getSelected();
-        if (idx !== -1) wasmInstance.exports.bring_to_front_wasm(idx);
+        if (idx !== -1) {
+            wasmInstance.exports.bring_to_front_wasm(idx);
+            saveStateDebounced();
+        }
     });
 
     document.getElementById('btn-z-back').addEventListener('click', () => {
         const idx = getSelected();
-        if (idx !== -1) wasmInstance.exports.send_to_back_wasm(idx);
+        if (idx !== -1) {
+            wasmInstance.exports.send_to_back_wasm(idx);
+            saveStateDebounced();
+        }
     });
 
     document.getElementById('btn-z-forward').addEventListener('click', () => {
         const idx = getSelected();
-        if (idx !== -1) wasmInstance.exports.move_forward_wasm(idx);
+        if (idx !== -1) {
+            wasmInstance.exports.move_forward_wasm(idx);
+            saveStateDebounced();
+        }
     });
 
     document.getElementById('btn-z-backward').addEventListener('click', () => {
         const idx = getSelected();
-        if (idx !== -1) wasmInstance.exports.move_backward_wasm(idx);
+        if (idx !== -1) {
+            wasmInstance.exports.move_backward_wasm(idx);
+            saveStateDebounced();
+        }
     });
 }
 
@@ -918,6 +938,12 @@ async function start() {
 
         setupInputHandlers();
         bindPropertiesPanelEvents();
+
+        try {
+            await loadState();
+        } catch (e) {
+            console.error("Error loading state from localStorage:", e);
+        }
 
         // Hide loader panel
         document.getElementById('loader').style.opacity = '0';
@@ -1152,10 +1178,12 @@ function setupInputHandlers() {
         if (isDrawMode && isDrawingStroke) {
             wasmInstance.exports.end_stroke();
             isDrawingStroke = false;
+            saveStateDebounced();
             return;
         }
         const coords = getCanvasCoords(e);
         wasmInstance.exports.on_mouse_up(e.button, coords.x, coords.y);
+        saveStateDebounced();
     });
 
     window.addEventListener('wheel', (e) => {
@@ -1168,6 +1196,7 @@ function setupInputHandlers() {
             // Trackpad two-finger scroll panning
             wasmInstance.exports.pan_canvas(-e.deltaX, -e.deltaY);
         }
+        saveStateDebounced();
     }, { passive: false });
 
     // Touch screen state trackers
@@ -1286,6 +1315,7 @@ function setupInputHandlers() {
             lastTouchX = coords.x;
             lastTouchY = coords.y;
         }
+        saveStateDebounced();
         e.preventDefault();
     }, { passive: false });
 
@@ -1297,6 +1327,7 @@ function setupInputHandlers() {
             wasmInstance.exports.on_mouse_up(0, lastTouchX, lastTouchY);
         }
         isTwoFingerTouch = false;
+        saveStateDebounced();
     }, { passive: false });
 
     canvas.addEventListener('contextmenu', (e) => {
@@ -1325,6 +1356,9 @@ function setupInputHandlers() {
 
         if (keyCode !== 0) {
             wasmInstance.exports.on_key_down(keyCode);
+            if (keyCode === 8 || keyCode === 46) {
+                saveStateDebounced();
+            }
         }
     });
 
@@ -1435,10 +1469,12 @@ function setupInputHandlers() {
 
                 const textureId = textures.length;
                 textures.push(texture);
+                uploadedImageDataUrls[textureId] = event.target.result;
 
                 const coords = getWorldCoords(lastClientX, lastClientY);
                 // 4 is WIDGET_IMAGE
                 wasmInstance.exports.add_widget_wasm(4, coords.x, coords.y, textureId, img.width, img.height);
+                saveStateDebounced();
             };
             img.src = event.target.result;
         };
@@ -1462,6 +1498,7 @@ function setupInputHandlers() {
                 writeString(textPtr, 128, data.text);
             }
             wasmInstance.exports.mark_dirty_wasm();
+            saveStateDebounced();
         }
     }
 
@@ -1477,42 +1514,49 @@ function setupInputHandlers() {
             // Default styling for pasted text: dark slate navy
             wasmInstance.exports.set_node_text_color(newIdx, 30/255, 41/255, 59/255);
             wasmInstance.exports.mark_dirty_wasm();
+            saveStateDebounced();
         }
     }
 
     document.getElementById('btn-bulk-create').addEventListener('click', () => {
         commitText();
         wasmInstance.exports.create_100k_infographics();
+        saveStateDebounced();
     });
 
     document.getElementById('btn-add-sticky').addEventListener('click', () => {
         commitText();
         const center = getScreenCenterInWorld();
         wasmInstance.exports.add_widget_wasm(0, center.x, center.y, -1, 0, 0);
+        saveStateDebounced();
     });
 
     document.getElementById('btn-add-rect').addEventListener('click', () => {
         commitText();
         const center = getScreenCenterInWorld();
         wasmInstance.exports.add_widget_wasm(1, center.x, center.y, -1, 0, 0);
+        saveStateDebounced();
     });
 
     document.getElementById('btn-add-oval').addEventListener('click', () => {
         commitText();
         const center = getScreenCenterInWorld();
         wasmInstance.exports.add_widget_wasm(2, center.x, center.y, -1, 0, 0);
+        saveStateDebounced();
     });
 
     document.getElementById('btn-add-triangle').addEventListener('click', () => {
         commitText();
         const center = getScreenCenterInWorld();
         wasmInstance.exports.add_widget_wasm(7, center.x, center.y, -1, 0, 0);
+        saveStateDebounced();
     });
 
     document.getElementById('btn-add-text').addEventListener('click', () => {
         commitText();
         const center = getScreenCenterInWorld();
         wasmInstance.exports.add_widget_wasm(3, center.x, center.y, -1, 0, 0);
+        saveStateDebounced();
     });
 
     const imageLoader = document.getElementById('image-loader');
@@ -1554,10 +1598,12 @@ function setupInputHandlers() {
 
                 const textureId = textures.length;
                 textures.push(texture);
+                uploadedImageDataUrls[textureId] = event.target.result;
 
                 const center = getScreenCenterInWorld();
                 wasmInstance.exports.add_widget_wasm(4, center.x, center.y, textureId, img.width, img.height);
                 imageLoader.value = '';
+                saveStateDebounced();
             };
             img.src = event.target.result;
         };
@@ -1582,6 +1628,7 @@ function setupInputHandlers() {
         try {
             wasmInstance.exports.on_btn_clear_click();
             console.log("on_btn_clear_click finished calling WASM");
+            saveStateDebounced();
         } catch (e) {
             console.error("WASM on_btn_clear_click crashed:", e);
         }
@@ -1602,6 +1649,225 @@ function setupInputHandlers() {
             btnToggleDebug.style.borderColor = 'rgba(94, 106, 210, 0.3)';
         }
     });
+}
+
+let saveTimeout = null;
+function saveStateDebounced() {
+    if (saveTimeout) {
+        clearTimeout(saveTimeout);
+    }
+    saveTimeout = setTimeout(() => {
+        saveState();
+    }, 250);
+}
+
+function saveState() {
+    if (!wasmInstance) return;
+
+    try {
+        const state = {
+            panX: wasmInstance.exports.get_camera_pan_x(),
+            panY: wasmInstance.exports.get_camera_pan_y(),
+            zoom: wasmInstance.exports.get_camera_zoom(),
+            entities: [],
+            imageDataUrls: uploadedImageDataUrls
+        };
+
+        const count = wasmInstance.exports.get_node_count();
+        for (let i = 0; i < count; i++) {
+            const mask = wasmInstance.exports.get_entity_mask(i);
+            if (mask === 0) continue; // COMP_NONE or deleted
+
+            const ent = { mask };
+
+            // COMP_TRANSFORM (1 << 0)
+            if (mask & 1) {
+                ent.x = wasmInstance.exports.get_node_x(i);
+                ent.y = wasmInstance.exports.get_node_y(i);
+                ent.w = wasmInstance.exports.get_node_width(i);
+                ent.h = wasmInstance.exports.get_node_height(i);
+            }
+
+            // COMP_RENDER (1 << 1)
+            if (mask & 2) {
+                ent.type = wasmInstance.exports.get_node_type(i);
+                ent.bg_r = wasmInstance.exports.get_node_bg_r(i);
+                ent.bg_g = wasmInstance.exports.get_node_bg_g(i);
+                ent.bg_b = wasmInstance.exports.get_node_bg_b(i);
+                ent.bg_a = wasmInstance.exports.get_node_bg_a(i);
+                ent.border_r = wasmInstance.exports.get_node_border_r(i);
+                ent.border_g = wasmInstance.exports.get_node_border_g(i);
+                ent.border_b = wasmInstance.exports.get_node_border_b(i);
+                ent.border_a = wasmInstance.exports.get_node_border_a(i);
+                ent.text_r = wasmInstance.exports.get_node_text_r(i);
+                ent.text_g = wasmInstance.exports.get_node_text_g(i);
+                ent.text_b = wasmInstance.exports.get_node_text_b(i);
+                ent.font_size = wasmInstance.exports.get_node_font_size(i);
+                ent.texture_id = wasmInstance.exports.get_node_texture_id(i);
+            }
+
+            // COMP_TEXT (1 << 2)
+            if (mask & 4) {
+                const textPtr = wasmInstance.exports.get_node_text_ptr(i);
+                ent.text = readNullTerminatedString(textPtr);
+            }
+
+            // COMP_PATH (1 << 3)
+            if (mask & 8) {
+                const startIdx = wasmInstance.exports.get_path_start_idx(i);
+                const len = wasmInstance.exports.get_path_point_len(i);
+                ent.path_points = [];
+                for (let k = 0; k < len; k++) {
+                    const ptX = wasmInstance.exports.get_path_point_x(startIdx + k);
+                    const ptY = wasmInstance.exports.get_path_point_y(startIdx + k);
+                    ent.path_points.push({ x: ptX, y: ptY });
+                }
+            }
+
+            // COMP_CONNECTION (1 << 4)
+            if (mask & 16) {
+                ent.from_entity = wasmInstance.exports.get_connection_from(i);
+                ent.to_entity = wasmInstance.exports.get_connection_to(i);
+            }
+
+            state.entities.push(ent);
+        }
+
+        localStorage.setItem("dust_canvas_state", JSON.stringify(state));
+    } catch (e) {
+        console.error("Failed to save state to localStorage:", e);
+        if (e.name === 'QuotaExceededError' || e.code === 22) {
+            alert("Local storage is full! Clean up the board or remove large uploaded images.");
+        }
+    }
+}
+
+async function createTextureFromDataUrl(dataUrl) {
+    return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = img.width;
+            tempCanvas.height = img.height;
+            const tempCtx = tempCanvas.getContext('2d');
+            tempCtx.drawImage(img, 0, 0);
+            const imgData = tempCtx.getImageData(0, 0, img.width, img.height);
+
+            const imgMips = numMipLevels(img.width, img.height);
+            const texture = device.createTexture({
+                size: [img.width, img.height],
+                format: 'rgba8unorm',
+                mipLevelCount: imgMips,
+                usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT
+            });
+
+            device.queue.writeTexture(
+                { texture: texture },
+                imgData.data,
+                { bytesPerRow: img.width * 4 },
+                [img.width, img.height]
+            );
+            generateMipmaps(texture, img.width, img.height);
+            resolve(texture);
+        };
+        img.src = dataUrl;
+    });
+}
+
+async function loadState() {
+    if (!wasmInstance) return false;
+
+    const savedStateStr = localStorage.getItem("dust_canvas_state");
+    if (!savedStateStr) return false;
+
+    try {
+        const state = JSON.parse(savedStateStr);
+        if (!state || !state.entities) return false;
+
+        // Clear the current default layout
+        wasmInstance.exports.on_btn_clear_click();
+
+        // 1. Recreate textures
+        if (state.imageDataUrls && state.imageDataUrls.length > 1) {
+            for (let i = 1; i < state.imageDataUrls.length; i++) {
+                const dataUrl = state.imageDataUrls[i];
+                if (dataUrl) {
+                    const texture = await createTextureFromDataUrl(dataUrl);
+                    textures.push(texture);
+                    uploadedImageDataUrls.push(dataUrl);
+                } else {
+                    textures.push(null);
+                    uploadedImageDataUrls.push(null);
+                }
+            }
+        }
+
+        // 2. Recreate entities
+        const idMapping = {};
+        for (let i = 0; i < state.entities.length; i++) {
+            const ent = state.entities[i];
+            
+            // Recreate connection later (needs valid from/to entity IDs)
+            if (ent.mask & 16) continue;
+
+            if (ent.mask & 8) {
+                // PathDrawingComponent
+                const newIdx = wasmInstance.exports.recreate_path(
+                    ent.x, ent.y, ent.w, ent.h,
+                    ent.bg_r, ent.bg_g, ent.bg_b
+                );
+                idMapping[i] = newIdx;
+                if (ent.path_points) {
+                    for (let p = 0; p < ent.path_points.length; p++) {
+                        wasmInstance.exports.recreate_path_point(newIdx, ent.path_points[p].x, ent.path_points[p].y);
+                    }
+                }
+            } else {
+                // Normal node
+                const text = ent.text || "";
+                const tempBufPtr = wasmInstance.exports.get_temp_string_buffer();
+                writeString(tempBufPtr, 256, text);
+                const newIdx = wasmInstance.exports.recreate_node(
+                    ent.type, ent.x, ent.y, ent.w, ent.h,
+                    ent.bg_r, ent.bg_g, ent.bg_b, ent.bg_a,
+                    ent.border_r, ent.border_g, ent.border_b, ent.border_a,
+                    ent.text_r, ent.text_g, ent.text_b,
+                    ent.font_size, ent.texture_id,
+                    tempBufPtr
+                );
+                idMapping[i] = newIdx;
+            }
+        }
+
+        // Second pass: recreate connections using mapped indices
+        for (let i = 0; i < state.entities.length; i++) {
+            const ent = state.entities[i];
+            if (ent.mask & 16) {
+                const mappedFrom = idMapping[ent.from_entity];
+                const mappedTo = idMapping[ent.to_entity];
+                if (mappedFrom !== undefined && mappedTo !== undefined) {
+                    wasmInstance.exports.recreate_connection(
+                        mappedFrom, mappedTo,
+                        ent.bg_r, ent.bg_g, ent.bg_b
+                    );
+                }
+            }
+        }
+
+        // 3. Restore camera settings
+        if (state.panX !== undefined && state.panY !== undefined && state.zoom !== undefined) {
+            wasmInstance.exports.set_camera_pan_zoom(state.panX, state.panY, state.zoom);
+            currentZoom = state.zoom;
+            currentPanX = state.panX;
+            currentPanY = state.panY;
+        }
+
+        wasmInstance.exports.mark_dirty_wasm();
+        return true;
+    } catch (e) {
+        console.error("Failed to load saved state:", e);
+        return false;
+    }
 }
 
 // Start execution
