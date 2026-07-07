@@ -17,6 +17,8 @@ void js_set_editing_state(int is_editing, float x, float y, float w, float h,
 WASM_IMPORT("js_init_node_texture")
 void js_init_node_texture(int idx, const char *text_ptr, int type, float w,
                           float h);
+WASM_IMPORT("js_on_entity_shifted")
+void js_on_entity_shifted(int from_idx, int to_idx);
 
 // Thin WebGPU wrapper imports
 WASM_IMPORT("js_wgpu_init") int js_wgpu_init(int width, int height);
@@ -1026,6 +1028,8 @@ __attribute__((visibility("default"))) void shift_node(int from, int to) {
       to >= (int)entity_count)
     return;
 
+  js_on_entity_shifted(from, to);
+
   ComponentMask temp_mask = entity_masks[from];
   TransformComponent temp_transform = transform_components[from];
   RenderComponent temp_render = render_components[from];
@@ -1699,4 +1703,65 @@ __attribute__((visibility("default"))) void recreate_path_point(int path_entity,
     path_components[path_entity].path_point_len++;
   }
   mark_dirty();
+}
+
+__attribute__((visibility("default"))) void set_node_position(int idx, float x, float y) {
+  if (idx >= 0 && idx < (int)entity_count) {
+    transform_components[idx].x = x;
+    transform_components[idx].y = y;
+    mark_dirty();
+  }
+}
+
+__attribute__((visibility("default"))) void set_node_bg_color_direct(int idx, float r, float g, float b, float a) {
+  if (idx >= 0 && idx < (int)entity_count) {
+    render_components[idx].bg_r = r;
+    render_components[idx].bg_g = g;
+    render_components[idx].bg_b = b;
+    render_components[idx].bg_a = a;
+    if (render_components[idx].type != WIDGET_IMAGE && render_components[idx].type != WIDGET_PATH) {
+      js_init_node_texture(idx, text_components[idx].text, render_components[idx].type,
+                           transform_components[idx].w, transform_components[idx].h);
+    }
+    mark_dirty();
+  }
+}
+
+__attribute__((visibility("default"))) void set_node_border_color_direct(int idx, float r, float g, float b, float a) {
+  if (idx >= 0 && idx < (int)entity_count) {
+    render_components[idx].border_r = r;
+    render_components[idx].border_g = g;
+    render_components[idx].border_b = b;
+    render_components[idx].border_a = a;
+    if (render_components[idx].type != WIDGET_IMAGE && render_components[idx].type != WIDGET_PATH) {
+      js_init_node_texture(idx, text_components[idx].text, render_components[idx].type,
+                           transform_components[idx].w, transform_components[idx].h);
+    }
+    mark_dirty();
+  }
+}
+
+__attribute__((visibility("default"))) void set_node_text_color_direct(int idx, float r, float g, float b) {
+  if (idx >= 0 && idx < (int)entity_count) {
+    render_components[idx].r = r;
+    render_components[idx].g = g;
+    render_components[idx].b = b;
+    if (render_components[idx].type != WIDGET_IMAGE && render_components[idx].type != WIDGET_PATH) {
+      js_init_node_texture(idx, text_components[idx].text, render_components[idx].type,
+                           transform_components[idx].w, transform_components[idx].h);
+    }
+    mark_dirty();
+  }
+}
+
+__attribute__((visibility("default"))) void set_node_size_direct(int idx, float w, float h) {
+  if (idx >= 0 && idx < (int)entity_count) {
+    transform_components[idx].w = w;
+    transform_components[idx].h = h;
+    if (render_components[idx].type != WIDGET_IMAGE && render_components[idx].type != WIDGET_PATH) {
+      js_init_node_texture(idx, text_components[idx].text, render_components[idx].type,
+                           transform_components[idx].w, transform_components[idx].h);
+    }
+    mark_dirty();
+  }
 }

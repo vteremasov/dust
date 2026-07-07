@@ -42,6 +42,47 @@ let lastProps = {
     textR: -1, textG: -1, textB: -1
 };
 
+// P2P Collaboration & CRDT State
+const clientId = BigInt(Math.floor(Math.random() * 9007199254740991));
+let localEntitySeq = 0;
+const idToWasmIndex = new Map(); // Key: "clientId:seq" -> local index
+const wasmIndexToId = []; // local index -> { clientId: BigInt, seq: Number }
+const deletedEntities = new Map(); // Key: "clientId:seq" -> Timestamp
+const entityTimestamps = new Map(); // Key: "clientId:seq" -> { pos_time: Number, render_time: Number, text_time: Number }
+const previousEntityCache = new Map(); // Key: "clientId:seq" -> cached state object
+
+function rebuildIdCache() {
+    idToWasmIndex.clear();
+    for (let i = 0; i < wasmIndexToId.length; i++) {
+        const globalId = wasmIndexToId[i];
+        if (globalId) {
+            idToWasmIndex.set(`${globalId.clientId}:${globalId.seq}`, i);
+        }
+    }
+}
+
+// Multi-Canvas Tab Management
+let tabList = [{ id: 'default', name: 'Main Canvas' }];
+let activeTabId = 'default';
+
+function loadTabConfig() {
+    const savedTabs = localStorage.getItem("dust_canvas_tabs");
+    const savedActive = localStorage.getItem("dust_canvas_active_tab");
+    if (savedTabs) {
+        try {
+            tabList = JSON.parse(savedTabs);
+        } catch (e) {
+            console.error("Failed to parse saved tabs:", e);
+        }
+    }
+    if (savedActive) {
+        activeTabId = savedActive;
+    }
+}
+loadTabConfig();
+
+
+
 
 
 let isDebugExpanded = false;
@@ -278,6 +319,28 @@ const importObject = {
             if (node_count !== lastNodeCount) {
                 document.getElementById('stat-nodes').innerText = node_count;
                 lastNodeCount = node_count;
+            }
+        },
+
+        js_on_entity_deleted: (entityIndex) => {
+            if (entityIndex >= 0 && entityIndex < wasmIndexToId.length) {
+                const globalId = wasmIndexToId[entityIndex];
+                if (globalId) {
+                    const key = `${globalId.clientId}:${globalId.seq}`;
+                    idToWasmIndex.delete(key);
+                    trackDeletion(globalId);
+                }
+                wasmIndexToId.splice(entityIndex, 1);
+                rebuildIdCache();
+            }
+        },
+
+        js_on_entity_shifted: (from_idx, to_idx) => {
+            if (from_idx >= 0 && from_idx < wasmIndexToId.length &&
+                to_idx >= 0 && to_idx < wasmIndexToId.length) {
+                const item = wasmIndexToId.splice(from_idx, 1)[0];
+                wasmIndexToId.splice(to_idx, 0, item);
+                rebuildIdCache();
             }
         },
 
@@ -1677,85 +1740,345 @@ function saveStateDebounced() {
     }, 250);
 }
 
-function saveState() {
-    if (!wasmInstance) return;
+function bufferToBase64(buf) {
+    let binstr = "";
+    const bytes = new Uint8Array(buf);
+    const len = bytes.byteLength;
+    for (let i = 0; i < len; i++) {
+        binstr += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binstr);
+}
 
-    try {
-        const state = {
-            panX: wasmInstance.exports.get_camera_pan_x(),
-            panY: wasmInstance.exports.get_camera_pan_y(),
-            zoom: wasmInstance.exports.get_camera_zoom(),
-            entities: [],
-            imageDataUrls: uploadedImageDataUrls
-        };
+function base64ToBuffer(base64) {
+    const binstr = atob(base64);
+    const len = binstr.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+        bytes[i] = binstr.charCodeAt(i);
+    }
+    return bytes.buffer;
+}
 
-        const count = wasmInstance.exports.get_node_count();
-        for (let i = 0; i < count; i++) {
-            const mask = wasmInstance.exports.get_entity_mask(i);
-            if (mask === 0) continue; // COMP_NONE or deleted
-
-            const ent = { mask };
-
-            // COMP_TRANSFORM (1 << 0)
-            if (mask & 1) {
-                ent.x = wasmInstance.exports.get_node_x(i);
-                ent.y = wasmInstance.exports.get_node_y(i);
-                ent.w = wasmInstance.exports.get_node_width(i);
-                ent.h = wasmInstance.exports.get_node_height(i);
-            }
-
-            // COMP_RENDER (1 << 1)
-            if (mask & 2) {
-                ent.type = wasmInstance.exports.get_node_type(i);
-                ent.bg_r = wasmInstance.exports.get_node_bg_r(i);
-                ent.bg_g = wasmInstance.exports.get_node_bg_g(i);
-                ent.bg_b = wasmInstance.exports.get_node_bg_b(i);
-                ent.bg_a = wasmInstance.exports.get_node_bg_a(i);
-                ent.border_r = wasmInstance.exports.get_node_border_r(i);
-                ent.border_g = wasmInstance.exports.get_node_border_g(i);
-                ent.border_b = wasmInstance.exports.get_node_border_b(i);
-                ent.border_a = wasmInstance.exports.get_node_border_a(i);
-                ent.text_r = wasmInstance.exports.get_node_text_r(i);
-                ent.text_g = wasmInstance.exports.get_node_text_g(i);
-                ent.text_b = wasmInstance.exports.get_node_text_b(i);
-                ent.font_size = wasmInstance.exports.get_node_font_size(i);
-                ent.texture_id = wasmInstance.exports.get_node_texture_id(i);
-            }
-
-            // COMP_TEXT (1 << 2)
-            if (mask & 4) {
-                const textPtr = wasmInstance.exports.get_node_text_ptr(i);
-                ent.text = readNullTerminatedString(textPtr);
-            }
-
-            // COMP_PATH (1 << 3)
-            if (mask & 8) {
-                const startIdx = wasmInstance.exports.get_path_start_idx(i);
-                const len = wasmInstance.exports.get_path_point_len(i);
-                ent.path_points = [];
-                for (let k = 0; k < len; k++) {
-                    const ptX = wasmInstance.exports.get_path_point_x(startIdx + k);
-                    const ptY = wasmInstance.exports.get_path_point_y(startIdx + k);
-                    ent.path_points.push({ x: ptX, y: ptY });
-                }
-            }
-
-            // COMP_CONNECTION (1 << 4)
-            if (mask & 16) {
-                ent.from_entity = wasmInstance.exports.get_connection_from(i);
-                ent.to_entity = wasmInstance.exports.get_connection_to(i);
-            }
-
-            state.entities.push(ent);
-        }
-
-        localStorage.setItem("dust_canvas_state", JSON.stringify(state));
-    } catch (e) {
-        console.error("Failed to save state to localStorage:", e);
-        if (e.name === 'QuotaExceededError' || e.code === 22) {
-            alert("Local storage is full! Clean up the board or remove large uploaded images.");
+function serializeStateToBuffer() {
+    const encoder = new TextEncoder();
+    // Allocate 16MB buffer and wrap in a view
+    const buffer = new ArrayBuffer(16 * 1024 * 1024);
+    const view = new DataView(buffer);
+    let offset = 0;
+    
+    // Magic: "DUST"
+    view.setUint8(offset++, 68);
+    view.setUint8(offset++, 85);
+    view.setUint8(offset++, 83);
+    view.setUint8(offset++, 84);
+    
+    // Version: 1
+    view.setUint16(offset, 1, true);
+    offset += 2;
+    
+    // Camera: panX, panY, zoom
+    view.setFloat32(offset, wasmInstance.exports.get_camera_pan_x(), true); offset += 4;
+    view.setFloat32(offset, wasmInstance.exports.get_camera_pan_y(), true); offset += 4;
+    view.setFloat32(offset, wasmInstance.exports.get_camera_zoom(), true); offset += 4;
+    
+    // Image URLs block
+    const validUrls = uploadedImageDataUrls.filter(url => url !== null);
+    view.setUint32(offset, validUrls.length, true);
+    offset += 4;
+    for (let i = 0; i < validUrls.length; i++) {
+        const url = validUrls[i] || "";
+        const encodedUrl = encoder.encode(url);
+        view.setUint32(offset, encodedUrl.length, true);
+        offset += 4;
+        new Uint8Array(buffer, offset, encodedUrl.length).set(encodedUrl);
+        offset += encodedUrl.length;
+    }
+    
+    // Entities count
+    const count = wasmInstance.exports.get_node_count();
+    let activeCount = 0;
+    for (let i = 0; i < count; i++) {
+        if (wasmInstance.exports.get_entity_mask(i) !== 0) {
+            activeCount++;
         }
     }
+    view.setUint32(offset, activeCount, true);
+    offset += 4;
+    
+    for (let i = 0; i < count; i++) {
+        const mask = wasmInstance.exports.get_entity_mask(i);
+        if (mask === 0) continue;
+        
+        // Ensure entity has a unique P2P ID assigned
+        if (!wasmIndexToId[i]) {
+            localEntitySeq++;
+            const newId = { clientId: clientId, seq: localEntitySeq };
+            wasmIndexToId[i] = newId;
+            idToWasmIndex.set(`${clientId}:${localEntitySeq}`, i);
+        }
+        
+        const globalId = wasmIndexToId[i];
+        
+        // ID (16 bytes: clientId (8), seq (8))
+        view.setBigUint64(offset, globalId.clientId, true);
+        offset += 8;
+        view.setUint32(offset, globalId.seq, true);
+        offset += 4;
+        
+        // Mask
+        view.setUint32(offset, mask, true);
+        offset += 4;
+        
+        // COMP_TRANSFORM (1)
+        if (mask & 1) {
+            view.setFloat32(offset, wasmInstance.exports.get_node_x(i), true); offset += 4;
+            view.setFloat32(offset, wasmInstance.exports.get_node_y(i), true); offset += 4;
+            view.setFloat32(offset, wasmInstance.exports.get_node_width(i), true); offset += 4;
+            view.setFloat32(offset, wasmInstance.exports.get_node_height(i), true); offset += 4;
+        }
+        
+        // COMP_RENDER (2)
+        if (mask & 2) {
+            view.setUint32(offset, wasmInstance.exports.get_node_type(i), true); offset += 4;
+            view.setFloat32(offset, wasmInstance.exports.get_node_bg_r(i), true); offset += 4;
+            view.setFloat32(offset, wasmInstance.exports.get_node_bg_g(i), true); offset += 4;
+            view.setFloat32(offset, wasmInstance.exports.get_node_bg_b(i), true); offset += 4;
+            view.setFloat32(offset, wasmInstance.exports.get_node_bg_a(i), true); offset += 4;
+            view.setFloat32(offset, wasmInstance.exports.get_node_border_r(i), true); offset += 4;
+            view.setFloat32(offset, wasmInstance.exports.get_node_border_g(i), true); offset += 4;
+            view.setFloat32(offset, wasmInstance.exports.get_node_border_b(i), true); offset += 4;
+            view.setFloat32(offset, wasmInstance.exports.get_node_border_a(i), true); offset += 4;
+            view.setFloat32(offset, wasmInstance.exports.get_node_text_r(i), true); offset += 4;
+            view.setFloat32(offset, wasmInstance.exports.get_node_text_g(i), true); offset += 4;
+            view.setFloat32(offset, wasmInstance.exports.get_node_text_b(i), true); offset += 4;
+            view.setFloat32(offset, wasmInstance.exports.get_node_font_size(i), true); offset += 4;
+            view.setInt32(offset, wasmInstance.exports.get_node_texture_id(i), true); offset += 4;
+        }
+        
+        // COMP_TEXT (4)
+        if (mask & 4) {
+            const textPtr = wasmInstance.exports.get_node_text_ptr(i);
+            const text = readNullTerminatedString(textPtr);
+            const encodedText = encoder.encode(text);
+            view.setUint32(offset, encodedText.length, true);
+            offset += 4;
+            new Uint8Array(buffer, offset, encodedText.length).set(encodedText);
+            offset += encodedText.length;
+        }
+        
+        // COMP_PATH (8)
+        if (mask & 8) {
+            const startIdx = wasmInstance.exports.get_path_start_idx(i);
+            const len = wasmInstance.exports.get_path_point_len(i);
+            view.setUint32(offset, len, true);
+            offset += 4;
+            for (let k = 0; k < len; k++) {
+                view.setFloat32(offset, wasmInstance.exports.get_path_point_x(startIdx + k), true); offset += 4;
+                view.setFloat32(offset, wasmInstance.exports.get_path_point_y(startIdx + k), true); offset += 4;
+            }
+        }
+        
+        // COMP_CONNECTION (16)
+        if (mask & 16) {
+            const fromIdx = wasmInstance.exports.get_connection_from(i);
+            const toIdx = wasmInstance.exports.get_connection_to(i);
+            
+            const fromGlobal = wasmIndexToId[fromIdx] || { clientId: 0n, seq: 0 };
+            const toGlobal = wasmIndexToId[toIdx] || { clientId: 0n, seq: 0 };
+            
+            view.setBigUint64(offset, fromGlobal.clientId, true); offset += 8;
+            view.setUint32(offset, fromGlobal.seq, true); offset += 4;
+            view.setBigUint64(offset, toGlobal.clientId, true); offset += 8;
+            view.setUint32(offset, toGlobal.seq, true); offset += 4;
+        }
+    }
+    
+    return buffer.slice(0, offset);
+}
+
+async function deserializeStateFromBuffer(buffer) {
+    if (!wasmInstance) return false;
+    const decoder = new TextDecoder();
+    const view = new DataView(buffer);
+    let offset = 0;
+    
+    if (view.getUint8(offset++) !== 68 || // 'D'
+        view.getUint8(offset++) !== 85 || // 'U'
+        view.getUint8(offset++) !== 83 || // 'S'
+        view.getUint8(offset++) !== 84) {  // 'T'
+        console.error("Invalid magic signature");
+        return false;
+    }
+    
+    const version = view.getUint16(offset, true);
+    offset += 2;
+    if (version !== 1) return false;
+    
+    const panX = view.getFloat32(offset, true); offset += 4;
+    const panY = view.getFloat32(offset, true); offset += 4;
+    const zoom = view.getFloat32(offset, true); offset += 4;
+    
+    const imgCount = view.getUint32(offset, true);
+    offset += 4;
+    
+    const loadedImageDataUrls = [];
+    const newTextures = [];
+    
+    for (let i = 0; i < imgCount; i++) {
+        const strLen = view.getUint32(offset, true);
+        offset += 4;
+        const strBytes = new Uint8Array(buffer, offset, strLen);
+        offset += strLen;
+        const dataUrl = decoder.decode(strBytes);
+        
+        if (dataUrl) {
+            loadedImageDataUrls.push(dataUrl);
+            const texture = await createTextureFromDataUrl(dataUrl);
+            newTextures.push(texture);
+        } else {
+            loadedImageDataUrls.push(null);
+            newTextures.push(null);
+        }
+    }
+    
+    uploadedImageDataUrls.length = 0;
+    uploadedImageDataUrls.push(...loadedImageDataUrls);
+    textures.length = 0;
+    textures.push(...newTextures);
+    
+    wasmInstance.exports.on_btn_clear_click();
+    idToWasmIndex.clear();
+    wasmIndexToId.length = 0;
+    previousEntityCache.clear();
+    
+    const entityCount = view.getUint32(offset, true);
+    offset += 4;
+    
+    const parsedEntities = [];
+    const idMapping = {};
+    
+    for (let i = 0; i < entityCount; i++) {
+        const cId = view.getBigUint64(offset, true); offset += 8;
+        const seq = view.getUint32(offset, true); offset += 4;
+        const mask = view.getUint32(offset, true); offset += 4;
+        
+        const key = `${cId}:${seq}`;
+        const ent = { cId, seq, key, mask };
+        
+        if (mask & 1) {
+            ent.x = view.getFloat32(offset, true); offset += 4;
+            ent.y = view.getFloat32(offset, true); offset += 4;
+            ent.w = view.getFloat32(offset, true); offset += 4;
+            ent.h = view.getFloat32(offset, true); offset += 4;
+        }
+        
+        if (mask & 2) {
+            ent.type = view.getUint32(offset, true); offset += 4;
+            ent.bg_r = view.getFloat32(offset, true); offset += 4;
+            ent.bg_g = view.getFloat32(offset, true); offset += 4;
+            ent.bg_b = view.getFloat32(offset, true); offset += 4;
+            ent.bg_a = view.getFloat32(offset, true); offset += 4;
+            ent.border_r = view.getFloat32(offset, true); offset += 4;
+            ent.border_g = view.getFloat32(offset, true); offset += 4;
+            ent.border_b = view.getFloat32(offset, true); offset += 4;
+            ent.border_a = view.getFloat32(offset, true); offset += 4;
+            ent.text_r = view.getFloat32(offset, true); offset += 4;
+            ent.text_g = view.getFloat32(offset, true); offset += 4;
+            ent.text_b = view.getFloat32(offset, true); offset += 4;
+            ent.font_size = view.getFloat32(offset, true); offset += 4;
+            ent.texture_id = view.getInt32(offset, true); offset += 4;
+        }
+        
+        if (mask & 4) {
+            const strLen = view.getUint32(offset, true);
+            offset += 4;
+            const strBytes = new Uint8Array(buffer, offset, strLen);
+            offset += strLen;
+            ent.text = decoder.decode(strBytes);
+        }
+        
+        if (mask & 8) {
+            const pointCount = view.getUint32(offset, true);
+            offset += 4;
+            ent.path_points = [];
+            for (let k = 0; k < pointCount; k++) {
+                const ptX = view.getFloat32(offset, true); offset += 4;
+                const ptY = view.getFloat32(offset, true); offset += 4;
+                ent.path_points.push({ x: ptX, y: ptY });
+            }
+        }
+        
+        if (mask & 16) {
+            ent.from_cId = view.getBigUint64(offset, true); offset += 8;
+            ent.from_seq = view.getUint32(offset, true); offset += 4;
+            ent.to_cId = view.getBigUint64(offset, true); offset += 8;
+            ent.to_seq = view.getUint32(offset, true); offset += 4;
+        }
+        
+        parsedEntities.push(ent);
+        
+        if (!(mask & 16)) {
+            let newIdx = -1;
+            if (mask & 8) {
+                newIdx = wasmInstance.exports.recreate_path(ent.x, ent.y, ent.w, ent.h, ent.bg_r, ent.bg_g, ent.bg_b);
+                if (ent.path_points) {
+                    for (let p = 0; p < ent.path_points.length; p++) {
+                        wasmInstance.exports.recreate_path_point(newIdx, ent.path_points[p].x, ent.path_points[p].y);
+                    }
+                }
+            } else {
+                const text = ent.text || "";
+                const tempBufPtr = wasmInstance.exports.get_temp_string_buffer();
+                writeString(tempBufPtr, 100000, text);
+                newIdx = wasmInstance.exports.recreate_node(
+                    ent.type, ent.x, ent.y, ent.w, ent.h,
+                    ent.bg_r, ent.bg_g, ent.bg_b, ent.bg_a,
+                    ent.border_r, ent.border_g, ent.border_b, ent.border_a,
+                    ent.text_r, ent.text_g, ent.text_b,
+                    ent.font_size, ent.texture_id,
+                    tempBufPtr
+                );
+            }
+            if (newIdx !== -1) {
+                idMapping[key] = newIdx;
+                wasmIndexToId[newIdx] = { clientId: cId, seq: seq };
+                idToWasmIndex.set(key, newIdx);
+                if (cId === clientId && seq > localEntitySeq) {
+                    localEntitySeq = seq;
+                }
+            }
+        }
+    }
+    
+    // Connections recreating
+    for (let i = 0; i < parsedEntities.length; i++) {
+        const ent = parsedEntities[i];
+        if (ent.mask & 16) {
+            const fromKey = `${ent.from_cId}:${ent.from_seq}`;
+            const toKey = `${ent.to_cId}:${ent.to_seq}`;
+            const fromIdx = idMapping[fromKey];
+            const toIdx = idMapping[toKey];
+            if (fromIdx !== undefined && toIdx !== undefined) {
+                const newIdx = wasmInstance.exports.recreate_connection(fromIdx, toIdx, ent.bg_r, ent.bg_g, ent.bg_b);
+                if (newIdx !== -1) {
+                    idMapping[ent.key] = newIdx;
+                    wasmIndexToId[newIdx] = { clientId: ent.cId, seq: ent.seq };
+                    idToWasmIndex.set(ent.key, newIdx);
+                    if (ent.cId === clientId && ent.seq > localEntitySeq) {
+                        localEntitySeq = ent.seq;
+                    }
+                }
+            }
+        }
+    }
+    
+    wasmInstance.exports.set_camera_pan_zoom(panX, panY, zoom);
+    currentZoom = zoom;
+    currentPanX = panX;
+    currentPanY = panY;
+    wasmInstance.exports.mark_dirty_wasm();
+    return true;
 }
 
 async function createTextureFromDataUrl(dataUrl) {
@@ -1790,20 +2113,60 @@ async function createTextureFromDataUrl(dataUrl) {
     });
 }
 
+function saveState() {
+    if (!wasmInstance) return;
+    try {
+        checkAndSyncDeltas();
+        const buffer = serializeStateToBuffer();
+        const base64 = bufferToBase64(buffer);
+        localStorage.setItem("dust_canvas_state_bin_" + activeTabId, base64);
+        localStorage.setItem("dust_canvas_tabs", JSON.stringify(tabList));
+        localStorage.setItem("dust_canvas_active_tab", activeTabId);
+    } catch (e) {
+        console.error("Failed to save state to localStorage:", e);
+    }
+}
+
 async function loadState() {
     if (!wasmInstance) return false;
+    const base64 = localStorage.getItem("dust_canvas_state_bin_" + activeTabId);
+    if (base64) {
+        try {
+            const buffer = base64ToBuffer(base64);
+            return await deserializeStateFromBuffer(buffer);
+        } catch (e) {
+            console.error("Failed to parse binary localStorage state:", e);
+            return false;
+        }
+    }
+    
+    // Migrate legacy JSON format if present (only applicable for 'default' tab)
+    if (activeTabId === 'default') {
+        const legacy = localStorage.getItem("dust_canvas_state");
+        if (legacy) {
+            console.log("Migrating legacy JSON board to binary format...");
+            const success = await loadStateLegacyJson();
+            if (success) {
+                saveState();
+                localStorage.removeItem("dust_canvas_state");
+            }
+            return success;
+        }
+    }
+    return false;
+}
 
+async function loadStateLegacyJson() {
     const savedStateStr = localStorage.getItem("dust_canvas_state");
     if (!savedStateStr) return false;
-
     try {
         const state = JSON.parse(savedStateStr);
         if (!state || !state.entities) return false;
-
-        // Clear the current default layout
+        
         wasmInstance.exports.on_btn_clear_click();
-
-        // 1. Recreate textures
+        idToWasmIndex.clear();
+        wasmIndexToId.length = 0;
+        
         if (state.imageDataUrls && state.imageDataUrls.length > 1) {
             for (let i = 1; i < state.imageDataUrls.length; i++) {
                 const dataUrl = state.imageDataUrls[i];
@@ -1817,33 +2180,31 @@ async function loadState() {
                 }
             }
         }
-
-        // 2. Recreate entities
+        
         const idMapping = {};
         for (let i = 0; i < state.entities.length; i++) {
             const ent = state.entities[i];
-            
-            // Recreate connection later (needs valid from/to entity IDs)
             if (ent.mask & 16) continue;
-
+            
+            let newIdx = -1;
             if (ent.mask & 8) {
-                // PathDrawingComponent
-                const newIdx = wasmInstance.exports.recreate_path(
-                    ent.x, ent.y, ent.w, ent.h,
-                    ent.bg_r, ent.bg_g, ent.bg_b
-                );
+                newIdx = wasmInstance.exports.recreate_path(ent.x, ent.y, ent.w, ent.h, ent.bg_r, ent.bg_g, ent.bg_b);
                 idMapping[i] = newIdx;
+                localEntitySeq++;
+                const globalId = { clientId, seq: localEntitySeq };
+                wasmIndexToId[newIdx] = globalId;
+                idToWasmIndex.set(`${clientId}:${localEntitySeq}`, newIdx);
+                
                 if (ent.path_points) {
                     for (let p = 0; p < ent.path_points.length; p++) {
                         wasmInstance.exports.recreate_path_point(newIdx, ent.path_points[p].x, ent.path_points[p].y);
                     }
                 }
             } else {
-                // Normal node
                 const text = ent.text || "";
                 const tempBufPtr = wasmInstance.exports.get_temp_string_buffer();
                 writeString(tempBufPtr, 100000, text);
-                const newIdx = wasmInstance.exports.recreate_node(
+                newIdx = wasmInstance.exports.recreate_node(
                     ent.type, ent.x, ent.y, ent.w, ent.h,
                     ent.bg_r, ent.bg_g, ent.bg_b, ent.bg_a,
                     ent.border_r, ent.border_g, ent.border_b, ent.border_a,
@@ -1852,39 +2213,875 @@ async function loadState() {
                     tempBufPtr
                 );
                 idMapping[i] = newIdx;
+                localEntitySeq++;
+                const globalId = { clientId, seq: localEntitySeq };
+                wasmIndexToId[newIdx] = globalId;
+                idToWasmIndex.set(`${clientId}:${localEntitySeq}`, newIdx);
             }
         }
-
-        // Second pass: recreate connections using mapped indices
+        
         for (let i = 0; i < state.entities.length; i++) {
             const ent = state.entities[i];
             if (ent.mask & 16) {
                 const mappedFrom = idMapping[ent.from_entity];
                 const mappedTo = idMapping[ent.to_entity];
                 if (mappedFrom !== undefined && mappedTo !== undefined) {
-                    wasmInstance.exports.recreate_connection(
-                        mappedFrom, mappedTo,
-                        ent.bg_r, ent.bg_g, ent.bg_b
-                    );
+                    const newIdx = wasmInstance.exports.recreate_connection(mappedFrom, mappedTo, ent.bg_r, ent.bg_g, ent.bg_b);
+                    if (newIdx !== -1) {
+                        localEntitySeq++;
+                        const globalId = { clientId, seq: localEntitySeq };
+                        wasmIndexToId[newIdx] = globalId;
+                        idToWasmIndex.set(`${clientId}:${localEntitySeq}`, newIdx);
+                    }
                 }
             }
         }
-
-        // 3. Restore camera settings
+        
         if (state.panX !== undefined && state.panY !== undefined && state.zoom !== undefined) {
             wasmInstance.exports.set_camera_pan_zoom(state.panX, state.panY, state.zoom);
             currentZoom = state.zoom;
             currentPanX = state.panX;
             currentPanY = state.panY;
         }
-
         wasmInstance.exports.mark_dirty_wasm();
         return true;
     } catch (e) {
-        console.error("Failed to load saved state:", e);
+        console.error("Failed to parse legacy JSON state:", e);
         return false;
     }
 }
 
-// Start execution
+// Live LWW-CRDT Synchronization Engine
+function checkAndSyncDeltas() {
+    if (!wasmInstance) return;
+    const count = wasmInstance.exports.get_node_count();
+    const now = Date.now();
+    
+    for (let i = 0; i < count; i++) {
+        const mask = wasmInstance.exports.get_entity_mask(i);
+        if (mask === 0) continue;
+        
+        if (!wasmIndexToId[i]) {
+            localEntitySeq++;
+            const newId = { clientId, seq: localEntitySeq };
+            wasmIndexToId[i] = newId;
+            idToWasmIndex.set(`${clientId}:${localEntitySeq}`, i);
+        }
+        
+        const globalId = wasmIndexToId[i];
+        const key = `${globalId.clientId}:${globalId.seq}`;
+        
+        let prev = previousEntityCache.get(key);
+        let changed = false;
+        let tsRecord = entityTimestamps.get(key);
+        if (!tsRecord) {
+            tsRecord = { pos_time: 0, render_time: 0, text_time: 0 };
+            entityTimestamps.set(key, tsRecord);
+        }
+        
+        const current = { mask };
+        if (mask & 1) {
+            current.x = wasmInstance.exports.get_node_x(i);
+            current.y = wasmInstance.exports.get_node_y(i);
+            current.w = wasmInstance.exports.get_node_width(i);
+            current.h = wasmInstance.exports.get_node_height(i);
+        }
+        if (mask & 2) {
+            current.type = wasmInstance.exports.get_node_type(i);
+            current.bg_r = wasmInstance.exports.get_node_bg_r(i);
+            current.bg_g = wasmInstance.exports.get_node_bg_g(i);
+            current.bg_b = wasmInstance.exports.get_node_bg_b(i);
+            current.bg_a = wasmInstance.exports.get_node_bg_a(i);
+            current.border_r = wasmInstance.exports.get_node_border_r(i);
+            current.border_g = wasmInstance.exports.get_node_border_g(i);
+            current.border_b = wasmInstance.exports.get_node_border_b(i);
+            current.border_a = wasmInstance.exports.get_node_border_a(i);
+            current.text_r = wasmInstance.exports.get_node_text_r(i);
+            current.text_g = wasmInstance.exports.get_node_text_g(i);
+            current.text_b = wasmInstance.exports.get_node_text_b(i);
+            current.font_size = wasmInstance.exports.get_node_font_size(i);
+            current.texture_id = wasmInstance.exports.get_node_texture_id(i);
+        }
+        if (mask & 4) {
+            const textPtr = wasmInstance.exports.get_node_text_ptr(i);
+            current.text = readNullTerminatedString(textPtr);
+        }
+        if (mask & 8) {
+            const startIdx = wasmInstance.exports.get_path_start_idx(i);
+            const len = wasmInstance.exports.get_path_point_len(i);
+            current.path_points = [];
+            for (let k = 0; k < len; k++) {
+                current.path_points.push({
+                    x: wasmInstance.exports.get_path_point_x(startIdx + k),
+                    y: wasmInstance.exports.get_path_point_y(startIdx + k)
+                });
+            }
+        }
+        if (mask & 16) {
+            const fromIdx = wasmInstance.exports.get_connection_from(i);
+            const toIdx = wasmInstance.exports.get_connection_to(i);
+            const fromGlobal = wasmIndexToId[fromIdx] || { clientId: 0n, seq: 0 };
+            const toGlobal = wasmIndexToId[toIdx] || { clientId: 0n, seq: 0 };
+            current.from_cId = fromGlobal.clientId;
+            current.from_seq = fromGlobal.seq;
+            current.to_cId = toGlobal.clientId;
+            current.to_seq = toGlobal.seq;
+            current.bg_r = wasmInstance.exports.get_node_bg_r(i);
+            current.bg_g = wasmInstance.exports.get_node_bg_g(i);
+            current.bg_b = wasmInstance.exports.get_node_bg_b(i);
+        }
+        
+        if (!prev) {
+            changed = true;
+            tsRecord.pos_time = now;
+            tsRecord.render_time = now;
+            tsRecord.text_time = now;
+        } else {
+            let posChanged = false;
+            let renderChanged = false;
+            let textChanged = false;
+            
+            if (mask & 1) {
+                if (current.x !== prev.x || current.y !== prev.y || current.w !== prev.w || current.h !== prev.h) {
+                    posChanged = true;
+                }
+            }
+            if (mask & 2) {
+                if (current.type !== prev.type || current.bg_r !== prev.bg_r || current.bg_g !== prev.bg_g ||
+                    current.bg_b !== prev.bg_b || current.bg_a !== prev.bg_a || current.border_r !== prev.border_r ||
+                    current.border_g !== prev.border_g || current.border_b !== prev.border_b ||
+                    current.border_a !== prev.border_a || current.text_r !== prev.text_r ||
+                    current.text_g !== prev.text_g || current.text_b !== prev.text_b ||
+                    current.font_size !== prev.font_size || current.texture_id !== prev.texture_id) {
+                    renderChanged = true;
+                }
+            }
+            if (mask & 4) {
+                if (current.text !== prev.text) {
+                    textChanged = true;
+                }
+            }
+            if (mask & 8) {
+                if (!prev.path_points || current.path_points.length !== prev.path_points.length) {
+                    posChanged = true;
+                } else {
+                    for (let p = 0; p < current.path_points.length; p++) {
+                        if (current.path_points[p].x !== prev.path_points[p].x || current.path_points[p].y !== prev.path_points[p].y) {
+                            posChanged = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (mask & 16) {
+                if (current.from_cId !== prev.from_cId || current.from_seq !== prev.from_seq ||
+                    current.to_cId !== prev.to_cId || current.to_seq !== prev.to_seq) {
+                    posChanged = true;
+                }
+            }
+            
+            if (posChanged) { tsRecord.pos_time = now; changed = true; }
+            if (renderChanged) { tsRecord.render_time = now; changed = true; }
+            if (textChanged) { tsRecord.text_time = now; changed = true; }
+        }
+        
+        previousEntityCache.set(key, current);
+        
+        if (changed) {
+            sendDeltaUpdate(globalId, mask, current, tsRecord);
+        }
+    }
+}
+
+function sendDeltaUpdate(globalId, mask, current, tsRecord) {
+    if (!isP2PConnected()) return;
+    const buffer = new ArrayBuffer(65536);
+    const view = new DataView(buffer);
+    let offset = 0;
+    const encoder = new TextEncoder();
+    
+    if (mask & 16) {
+        // OP_UPSERT_CONNECTION (0x02)
+        view.setUint8(offset++, 2);
+        view.setBigUint64(offset, globalId.clientId, true); offset += 8;
+        view.setUint32(offset, globalId.seq, true); offset += 4;
+        
+        view.setBigUint64(offset, BigInt(tsRecord.pos_time), true); offset += 8;
+        view.setBigUint64(offset, BigInt(tsRecord.render_time), true); offset += 8;
+        
+        view.setBigUint64(offset, current.from_cId, true); offset += 8;
+        view.setUint32(offset, current.from_seq, true); offset += 4;
+        view.setBigUint64(offset, current.to_cId, true); offset += 8;
+        view.setUint32(offset, current.to_seq, true); offset += 4;
+        
+        view.setFloat32(offset, current.bg_r, true); offset += 4;
+        view.setFloat32(offset, current.bg_g, true); offset += 4;
+        view.setFloat32(offset, current.bg_b, true); offset += 4;
+    } else if (mask & 8) {
+        // OP_UPSERT_PATH (0x03)
+        view.setUint8(offset++, 3);
+        view.setBigUint64(offset, globalId.clientId, true); offset += 8;
+        view.setUint32(offset, globalId.seq, true); offset += 4;
+        
+        view.setBigUint64(offset, BigInt(tsRecord.pos_time), true); offset += 8;
+        view.setBigUint64(offset, BigInt(tsRecord.render_time), true); offset += 8;
+        
+        view.setFloat32(offset, current.bg_r, true); offset += 4;
+        view.setFloat32(offset, current.bg_g, true); offset += 4;
+        view.setFloat32(offset, current.bg_b, true); offset += 4;
+        
+        view.setFloat32(offset, current.x, true); offset += 4;
+        view.setFloat32(offset, current.y, true); offset += 4;
+        view.setFloat32(offset, current.w, true); offset += 4;
+        view.setFloat32(offset, current.h, true); offset += 4;
+        
+        const ptCount = current.path_points.length;
+        view.setUint32(offset, ptCount, true); offset += 4;
+        for (let p = 0; p < ptCount; p++) {
+            view.setFloat32(offset, current.path_points[p].x, true); offset += 4;
+            view.setFloat32(offset, current.path_points[p].y, true); offset += 4;
+        }
+    } else {
+        // OP_UPSERT_NODE (0x01)
+        view.setUint8(offset++, 1);
+        view.setBigUint64(offset, globalId.clientId, true); offset += 8;
+        view.setUint32(offset, globalId.seq, true); offset += 4;
+        
+        view.setBigUint64(offset, BigInt(tsRecord.pos_time), true); offset += 8;
+        view.setBigUint64(offset, BigInt(tsRecord.render_time), true); offset += 8;
+        view.setBigUint64(offset, BigInt(tsRecord.text_time), true); offset += 8;
+        
+        view.setUint32(offset, mask, true); offset += 4;
+        
+        if (mask & 1) {
+            view.setFloat32(offset, current.x, true); offset += 4;
+            view.setFloat32(offset, current.y, true); offset += 4;
+            view.setFloat32(offset, current.w, true); offset += 4;
+            view.setFloat32(offset, current.h, true); offset += 4;
+        }
+        if (mask & 2) {
+            view.setUint32(offset, current.type, true); offset += 4;
+            view.setFloat32(offset, current.bg_r, true); offset += 4;
+            view.setFloat32(offset, current.bg_g, true); offset += 4;
+            view.setFloat32(offset, current.bg_b, true); offset += 4;
+            view.setFloat32(offset, current.bg_a, true); offset += 4;
+            view.setFloat32(offset, current.border_r, true); offset += 4;
+            view.setFloat32(offset, current.border_g, true); offset += 4;
+            view.setFloat32(offset, current.border_b, true); offset += 4;
+            view.setFloat32(offset, current.border_a, true); offset += 4;
+            view.setFloat32(offset, current.text_r, true); offset += 4;
+            view.setFloat32(offset, current.text_g, true); offset += 4;
+            view.setFloat32(offset, current.text_b, true); offset += 4;
+            view.setFloat32(offset, current.font_size, true); offset += 4;
+            view.setInt32(offset, current.texture_id, true); offset += 4;
+        }
+        if (mask & 4) {
+            const encodedText = encoder.encode(current.text || "");
+            view.setUint32(offset, encodedText.length, true); offset += 4;
+            new Uint8Array(buffer, offset, encodedText.length).set(encodedText);
+            offset += encodedText.length;
+        }
+    }
+    try {
+        dataChannel.send(buffer.slice(0, offset));
+    } catch (e) {
+        console.error("DataChannel send failed:", e);
+    }
+}
+
+function trackDeletion(globalId) {
+    const key = `${globalId.clientId}:${globalId.seq}`;
+    deletedEntities.set(key, Date.now());
+    broadcastDelete(globalId);
+}
+
+function broadcastDelete(globalId) {
+    if (!isP2PConnected()) return;
+    const buffer = new ArrayBuffer(32);
+    const view = new DataView(buffer);
+    let offset = 0;
+    
+    view.setUint8(offset++, 4); // OP_DELETE
+    view.setBigUint64(offset, globalId.clientId, true); offset += 8;
+    view.setUint32(offset, globalId.seq, true); offset += 4;
+    view.setBigUint64(offset, BigInt(Date.now()), true); offset += 8;
+    
+    try {
+        dataChannel.send(buffer.slice(0, offset));
+    } catch (e) {
+        console.error("Failed to broadcast delete:", e);
+    }
+}
+
+function handleIncomingP2PMessage(buffer) {
+    const view = new DataView(buffer);
+    const decoder = new TextDecoder();
+    let offset = 0;
+    
+    const opcode = view.getUint8(offset++);
+    
+    if (opcode === 5) {
+        // OP_SYNC_REQ (Send full state)
+        if (isP2PConnected()) {
+            const fullBuf = serializeStateToBuffer();
+            const header = new ArrayBuffer(5);
+            const hView = new DataView(header);
+            hView.setUint8(0, 6); // OP_SYNC_RESP (0x06)
+            hView.setUint32(1, fullBuf.byteLength, true);
+            dataChannel.send(header);
+            dataChannel.send(fullBuf);
+        }
+        return;
+    }
+    
+    if (opcode === 6) {
+        // OP_SYNC_RESP (Receive full state)
+        const size = view.getUint32(offset, true);
+        offset += 4;
+        const stateBytes = new Uint8Array(buffer, offset, size);
+        deserializeStateFromBuffer(stateBytes.buffer);
+        return;
+    }
+    
+    const cId = view.getBigUint64(offset, true); offset += 8;
+    const seq = view.getUint32(offset, true); offset += 4;
+    const key = `${cId}:${seq}`;
+    
+    // OP_DELETE (0x04)
+    if (opcode === 4) {
+        const deleteTime = Number(view.getBigUint64(offset, true)); offset += 8;
+        deletedEntities.set(key, deleteTime);
+        
+        const localIndex = idToWasmIndex.get(key);
+        if (localIndex !== undefined) {
+            wasmInstance.exports.ecs_delete_entity(localIndex);
+            wasmInstance.exports.mark_dirty_wasm();
+        }
+        return;
+    }
+    
+    // Check if deleted already with a newer timestamp
+    if (deletedEntities.has(key)) return;
+    
+    let tsRecord = entityTimestamps.get(key);
+    if (!tsRecord) {
+        tsRecord = { pos_time: 0, render_time: 0, text_time: 0 };
+        entityTimestamps.set(key, tsRecord);
+    }
+    
+    if (opcode === 1) {
+        // OP_UPSERT_NODE
+        const incomingPosTime = Number(view.getBigUint64(offset, true)); offset += 8;
+        const incomingRenderTime = Number(view.getBigUint64(offset, true)); offset += 8;
+        const incomingTextTime = Number(view.getBigUint64(offset, true)); offset += 8;
+        const mask = view.getUint32(offset, true); offset += 4;
+        
+        let localIndex = idToWasmIndex.get(key);
+        let nodeRecreated = false;
+        
+        const current = { mask };
+        if (mask & 1) {
+            current.x = view.getFloat32(offset, true); offset += 4;
+            current.y = view.getFloat32(offset, true); offset += 4;
+            current.w = view.getFloat32(offset, true); offset += 4;
+            current.h = view.getFloat32(offset, true); offset += 4;
+        }
+        if (mask & 2) {
+            current.type = view.getUint32(offset, true); offset += 4;
+            current.bg_r = view.getFloat32(offset, true); offset += 4;
+            current.bg_g = view.getFloat32(offset, true); offset += 4;
+            current.bg_b = view.getFloat32(offset, true); offset += 4;
+            current.bg_a = view.getFloat32(offset, true); offset += 4;
+            current.border_r = view.getFloat32(offset, true); offset += 4;
+            current.border_g = view.getFloat32(offset, true); offset += 4;
+            current.border_b = view.getFloat32(offset, true); offset += 4;
+            current.border_a = view.getFloat32(offset, true); offset += 4;
+            current.text_r = view.getFloat32(offset, true); offset += 4;
+            current.text_g = view.getFloat32(offset, true); offset += 4;
+            current.text_b = view.getFloat32(offset, true); offset += 4;
+            current.font_size = view.getFloat32(offset, true); offset += 4;
+            current.texture_id = view.getInt32(offset, true); offset += 4;
+        }
+        if (mask & 4) {
+            const strLen = view.getUint32(offset, true);
+            offset += 4;
+            const strBytes = new Uint8Array(buffer, offset, strLen);
+            offset += strLen;
+            current.text = decoder.decode(strBytes);
+        }
+        
+        if (localIndex === undefined) {
+            // Recreate node
+            const text = current.text || "";
+            const tempBufPtr = wasmInstance.exports.get_temp_string_buffer();
+            writeString(tempBufPtr, 100000, text);
+            localIndex = wasmInstance.exports.recreate_node(
+                current.type || 0, current.x || 0, current.y || 0, current.w || 100, current.h || 100,
+                current.bg_r || 1, current.bg_g || 1, current.bg_b || 1, current.bg_a || 1,
+                current.border_r || 0, current.border_g || 0, current.border_b || 0, current.border_a || 1,
+                current.text_r || 0, current.text_g || 0, current.text_b || 0,
+                current.font_size || 18, current.texture_id || -1,
+                tempBufPtr
+            );
+            if (localIndex !== -1) {
+                wasmIndexToId[localIndex] = { clientId: cId, seq };
+                idToWasmIndex.set(key, localIndex);
+                tsRecord.pos_time = incomingPosTime;
+                tsRecord.render_time = incomingRenderTime;
+                tsRecord.text_time = incomingTextTime;
+                nodeRecreated = true;
+            }
+        }
+        
+        if (localIndex !== -1 && !nodeRecreated) {
+            // Merge coordinates LWW
+            if (incomingPosTime > tsRecord.pos_time && (mask & 1)) {
+                wasmInstance.exports.set_node_position(localIndex, current.x, current.y);
+                wasmInstance.exports.set_node_size_direct(localIndex, current.w, current.h);
+                tsRecord.pos_time = incomingPosTime;
+            }
+            // Merge styles LWW
+            if (incomingRenderTime > tsRecord.render_time && (mask & 2)) {
+                wasmInstance.exports.set_node_bg_color_direct(localIndex, current.bg_r, current.bg_g, current.bg_b, current.bg_a);
+                wasmInstance.exports.set_node_border_color_direct(localIndex, current.border_r, current.border_g, current.border_b, current.border_a);
+                wasmInstance.exports.set_node_text_color_direct(localIndex, current.text_r, current.text_g, current.text_b);
+                wasmInstance.exports.set_node_font_size(localIndex, current.font_size);
+                wasmInstance.exports.set_node_texture_id(localIndex, current.texture_id);
+                tsRecord.render_time = incomingRenderTime;
+            }
+            // Merge text LWW
+            if (incomingTextTime > tsRecord.text_time && (mask & 4)) {
+                const tempBufPtr = wasmInstance.exports.get_temp_string_buffer();
+                writeString(tempBufPtr, 100000, current.text || "");
+                wasmInstance.exports.set_node_text(localIndex, tempBufPtr);
+                tsRecord.text_time = incomingTextTime;
+            }
+        }
+        
+        previousEntityCache.set(key, current);
+        wasmInstance.exports.mark_dirty_wasm();
+    }
+    
+    else if (opcode === 2) {
+        // OP_UPSERT_CONNECTION
+        const incomingPosTime = Number(view.getBigUint64(offset, true)); offset += 8;
+        const incomingRenderTime = Number(view.getBigUint64(offset, true)); offset += 8;
+        
+        const from_cId = view.getBigUint64(offset, true); offset += 8;
+        const from_seq = view.getUint32(offset, true); offset += 4;
+        const to_cId = view.getBigUint64(offset, true); offset += 8;
+        const to_seq = view.getUint32(offset, true); offset += 4;
+        
+        const bg_r = view.getFloat32(offset, true); offset += 4;
+        const bg_g = view.getFloat32(offset, true); offset += 4;
+        const bg_b = view.getFloat32(offset, true); offset += 4;
+        
+        let localIndex = idToWasmIndex.get(key);
+        if (localIndex === undefined) {
+            const fromKey = `${from_cId}:${from_seq}`;
+            const toKey = `${to_cId}:${to_seq}`;
+            const fromIdx = idToWasmIndex.get(fromKey);
+            const toIdx = idToWasmIndex.get(toKey);
+            
+            if (fromIdx !== undefined && toIdx !== undefined) {
+                localIndex = wasmInstance.exports.recreate_connection(fromIdx, toIdx, bg_r, bg_g, bg_b);
+                if (localIndex !== -1) {
+                    wasmIndexToId[localIndex] = { clientId: cId, seq };
+                    idToWasmIndex.set(key, localIndex);
+                    tsRecord.pos_time = incomingPosTime;
+                    tsRecord.render_time = incomingRenderTime;
+                }
+            }
+        } else {
+            // Update color LWW
+            if (incomingRenderTime > tsRecord.render_time) {
+                wasmInstance.exports.set_node_bg_color_direct(localIndex, bg_r, bg_g, bg_b, 1.0);
+                tsRecord.render_time = incomingRenderTime;
+            }
+        }
+        wasmInstance.exports.mark_dirty_wasm();
+    }
+    
+    else if (opcode === 3) {
+        // OP_UPSERT_PATH
+        const incomingPosTime = Number(view.getBigUint64(offset, true)); offset += 8;
+        const incomingRenderTime = Number(view.getBigUint64(offset, true)); offset += 8;
+        
+        const bg_r = view.getFloat32(offset, true); offset += 4;
+        const bg_g = view.getFloat32(offset, true); offset += 4;
+        const bg_b = view.getFloat32(offset, true); offset += 4;
+        
+        const x = view.getFloat32(offset, true); offset += 4;
+        const y = view.getFloat32(offset, true); offset += 4;
+        const w = view.getFloat32(offset, true); offset += 4;
+        const h = view.getFloat32(offset, true); offset += 4;
+        
+        const ptCount = view.getUint32(offset, true); offset += 4;
+        const pathPoints = [];
+        for (let p = 0; p < ptCount; p++) {
+            pathPoints.push({
+                x: view.getFloat32(offset, true), offset: offset += 4,
+                y: view.getFloat32(offset, true), offset: offset += 4
+            });
+        }
+        
+        let localIndex = idToWasmIndex.get(key);
+        if (localIndex === undefined) {
+            localIndex = wasmInstance.exports.recreate_path(x, y, w, h, bg_r, bg_g, bg_b);
+            if (localIndex !== -1) {
+                wasmIndexToId[localIndex] = { clientId: cId, seq };
+                idToWasmIndex.set(key, localIndex);
+                tsRecord.pos_time = incomingPosTime;
+                tsRecord.render_time = incomingRenderTime;
+                for (let p = 0; p < pathPoints.length; p++) {
+                    wasmInstance.exports.recreate_path_point(localIndex, pathPoints[p].x, pathPoints[p].y);
+                }
+            }
+        }
+        wasmInstance.exports.mark_dirty_wasm();
+    }
+}
+
+// Ephemeral WebRTC P2P Handshake Manager
+const webrtcConfig = {
+    iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' }
+    ]
+};
+
+function initWebRTC(isHost) {
+    disconnectP2P(); // Make sure to clean up any previous connection
+    
+    peerConnection = new RTCPeerConnection(webrtcConfig);
+    
+    peerConnection.onicecandidate = (event) => {
+        if (!event.candidate) {
+            // ICE gathering complete, encode details into offer/answer fields
+            const desc = peerConnection.localDescription;
+            const fullPayload = JSON.stringify(desc);
+            const base64Handshake = btoa(fullPayload);
+            
+            if (isHost) {
+                document.getElementById('host-offer-text').value = base64Handshake;
+            } else {
+                document.getElementById('join-answer-text').value = base64Handshake;
+            }
+        }
+    };
+    
+    peerConnection.onconnectionstatechange = () => {
+        updateCollabStatusUI();
+    };
+    
+    if (isHost) {
+        dataChannel = peerConnection.createDataChannel("dust-collab-sync", { ordered: true });
+        setupDataChannelEvents();
+    } else {
+        peerConnection.ondatachannel = (event) => {
+            dataChannel = event.channel;
+            setupDataChannelEvents();
+        };
+    }
+}
+
+function disconnectP2P() {
+    if (dataChannel) {
+        try { dataChannel.close(); } catch (e) {}
+        dataChannel = null;
+    }
+    if (peerConnection) {
+        try { peerConnection.close(); } catch (e) {}
+        peerConnection = null;
+    }
+    updateCollabStatusUI();
+    
+    // Clear token inputs
+    const hostOffer = document.getElementById('host-offer-text');
+    const hostAnswer = document.getElementById('host-answer-text');
+    const joinOffer = document.getElementById('join-offer-text');
+    const joinAnswer = document.getElementById('join-answer-text');
+    if (hostOffer) hostOffer.value = "";
+    if (hostAnswer) hostAnswer.value = "";
+    if (joinOffer) joinOffer.value = "";
+    if (joinAnswer) joinAnswer.value = "";
+}
+
+let partialBuffer = null;
+function setupDataChannelEvents() {
+    dataChannel.binaryType = "arraybuffer";
+    
+    dataChannel.onopen = () => {
+        updateCollabStatusUI();
+        // Guest sends sync request to host
+        if (dataChannel.label === "dust-collab-sync") {
+            const req = new ArrayBuffer(1);
+            new DataView(req).setUint8(0, 5); // OP_SYNC_REQ
+            dataChannel.send(req);
+        }
+    };
+    
+    dataChannel.onclose = () => {
+        updateCollabStatusUI();
+    };
+    
+    dataChannel.onmessage = (event) => {
+        const buf = event.data;
+        if (buf instanceof ArrayBuffer) {
+            const view = new DataView(buf);
+            if (view.byteLength === 5 && view.getUint8(0) === 6) {
+                // OP_SYNC_RESP Header, allocate assembly buffer
+                const expectedSize = view.getUint32(1, true);
+                partialBuffer = {
+                    expectedSize,
+                    bytes: new Uint8Array(expectedSize),
+                    received: 0
+                };
+            } else if (partialBuffer) {
+                // Large file data chunks
+                const chunkBytes = new Uint8Array(buf);
+                partialBuffer.bytes.set(chunkBytes, partialBuffer.received);
+                partialBuffer.received += chunkBytes.length;
+                if (partialBuffer.received >= partialBuffer.expectedSize) {
+                    deserializeStateFromBuffer(partialBuffer.bytes.buffer);
+                    partialBuffer = null;
+                }
+            } else {
+                handleIncomingP2PMessage(buf);
+            }
+        }
+    };
+}
+
+function updateCollabStatusUI() {
+    const statusLabel = document.getElementById('collab-status');
+    if (!statusLabel) return;
+    
+    if (!peerConnection) {
+        statusLabel.innerText = "Disconnected";
+        statusLabel.style.color = "#ef4444";
+    } else if (peerConnection.connectionState === "connected") {
+        statusLabel.innerText = "Connected";
+        statusLabel.style.color = "#10b981";
+    } else if (peerConnection.connectionState === "connecting") {
+        statusLabel.innerText = "Connecting...";
+        statusLabel.style.color = "#f59e0b";
+    } else {
+        statusLabel.innerText = "Disconnected";
+        statusLabel.style.color = "#ef4444";
+    }
+}
+
+function isP2PConnected() {
+    return dataChannel && dataChannel.readyState === "open";
+}
+
+// UI Rendering for Tabs
+function renderTabs() {
+    const list = document.getElementById("tab-list");
+    if (!list) return;
+    list.innerHTML = "";
+    tabList.forEach(tab => {
+        const tabEl = document.createElement("div");
+        tabEl.className = "canvas-tab" + (tab.id === activeTabId ? " active" : "");
+        
+        const label = document.createElement("span");
+        label.innerText = tab.name;
+        tabEl.addEventListener("dblclick", (e) => {
+            e.stopPropagation();
+            renameTab(tab.id);
+        });
+        tabEl.appendChild(label);
+        
+        if (tabList.length > 1) {
+            const closeBtn = document.createElement("button");
+            closeBtn.className = "tab-close";
+            closeBtn.innerHTML = "&times;";
+            closeBtn.title = "Delete tab";
+            closeBtn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                deleteTab(tab.id);
+            });
+            tabEl.appendChild(closeBtn);
+        }
+        
+        tabEl.addEventListener("click", () => {
+            if (tab.id !== activeTabId) {
+                switchTab(tab.id);
+            }
+        });
+        
+        list.appendChild(tabEl);
+    });
+}
+
+async function switchTab(tabId) {
+    saveState();
+    disconnectP2P();
+    activeTabId = tabId;
+    localStorage.setItem("dust_canvas_active_tab", activeTabId);
+    
+    renderTabs();
+    
+    const success = await loadState();
+    if (!success) {
+        wasmInstance.exports.on_btn_clear_click();
+        wasmInstance.exports.init_default_layout();
+        saveState();
+    }
+}
+
+function addNewTab() {
+    const newId = "tab_" + Date.now() + "_" + Math.random().toString(36).substr(2, 9);
+    const newName = "Canvas " + (tabList.length + 1);
+    tabList.push({ id: newId, name: newName });
+    localStorage.setItem("dust_canvas_tabs", JSON.stringify(tabList));
+    switchTab(newId);
+}
+
+function deleteTab(tabId) {
+    if (tabList.length <= 1) return;
+    
+    const confirmDelete = confirm("Are you sure you want to delete this tab and all its contents?");
+    if (!confirmDelete) return;
+    
+    localStorage.removeItem("dust_canvas_state_bin_" + tabId);
+    
+    const index = tabList.findIndex(t => t.id === tabId);
+    tabList.splice(index, 1);
+    localStorage.setItem("dust_canvas_tabs", JSON.stringify(tabList));
+    
+    if (activeTabId === tabId) {
+        switchTab(tabList[0].id);
+    } else {
+        renderTabs();
+    }
+}
+
+function renameTab(tabId) {
+    const tab = tabList.find(t => t.id === tabId);
+    if (!tab) return;
+    const newName = prompt("Enter new name for the tab:", tab.name);
+    if (newName && newName.trim()) {
+        tab.name = newName.trim();
+        localStorage.setItem("dust_canvas_tabs", JSON.stringify(tabList));
+        renderTabs();
+    }
+}
+
+// UI Wire-up for Collaboration Modal
+function setupCollabUI() {
+    const modal = document.getElementById('collab-modal');
+    const btnOpen = document.getElementById('btn-collab');
+    const btnClose = document.getElementById('btn-collab-close');
+    
+    const tabHost = document.getElementById('tab-host');
+    const tabJoin = document.getElementById('tab-join');
+    const panelHost = document.getElementById('panel-host');
+    const panelJoin = document.getElementById('panel-join');
+    
+    if (!btnOpen) return;
+    
+    btnOpen.addEventListener('click', () => {
+        modal.style.display = 'flex';
+        updateCollabStatusUI();
+    });
+    
+    btnClose.addEventListener('click', () => {
+        modal.style.display = 'none';
+    });
+    
+    tabHost.addEventListener('click', () => {
+        tabHost.style.background = 'rgba(255,255,255,0.08)';
+        tabHost.style.borderColor = 'rgba(255,255,255,0.15)';
+        tabHost.style.color = 'var(--text-color)';
+        
+        tabJoin.style.background = 'transparent';
+        tabJoin.style.borderColor = 'transparent';
+        tabJoin.style.color = 'var(--text-muted)';
+        
+        panelHost.style.display = 'flex';
+        panelJoin.style.display = 'none';
+    });
+    
+    tabJoin.addEventListener('click', () => {
+        tabJoin.style.background = 'rgba(255,255,255,0.08)';
+        tabJoin.style.borderColor = 'rgba(255,255,255,0.15)';
+        tabJoin.style.color = 'var(--text-color)';
+        
+        tabHost.style.background = 'transparent';
+        tabHost.style.borderColor = 'transparent';
+        tabHost.style.color = 'var(--text-muted)';
+        
+        panelJoin.style.display = 'flex';
+        panelHost.style.display = 'none';
+    });
+    
+    // Host buttons
+    document.getElementById('btn-host-generate').addEventListener('click', async () => {
+        initWebRTC(true);
+        const offer = await peerConnection.createOffer();
+        await peerConnection.setLocalDescription(offer);
+    });
+    
+    document.getElementById('btn-host-copy-offer').addEventListener('click', () => {
+        const text = document.getElementById('host-offer-text');
+        text.select();
+        navigator.clipboard.writeText(text.value);
+    });
+    
+    document.getElementById('btn-host-connect').addEventListener('click', async () => {
+        const answerBase64 = document.getElementById('host-answer-text').value.trim();
+        if (!answerBase64) return;
+        try {
+            const answerPayload = JSON.parse(atob(answerBase64));
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(answerPayload));
+        } catch (e) {
+            alert("Invalid answer handshake code!");
+        }
+    });
+    
+    // Guest buttons
+    document.getElementById('btn-join-generate').addEventListener('click', async () => {
+        const offerBase64 = document.getElementById('join-offer-text').value.trim();
+        if (!offerBase64) return;
+        try {
+            initWebRTC(false);
+            const offerPayload = JSON.parse(atob(offerBase64));
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(offerPayload));
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+        } catch (e) {
+            alert("Invalid offer handshake code!");
+        }
+    });
+    
+    document.getElementById('btn-join-copy-answer').addEventListener('click', () => {
+        const text = document.getElementById('join-answer-text');
+        text.select();
+        navigator.clipboard.writeText(text.value);
+    });
+}
+
+// Initialize startup
+async function start() {
+    const success = await initWgpuCanvas();
+    if (!success) return;
+    
+    setupInputHandlers();
+    setupCollabUI();
+    
+    const addTabBtn = document.getElementById("btn-add-tab");
+    if (addTabBtn) {
+        addTabBtn.addEventListener("click", addNewTab);
+    }
+    renderTabs();
+    
+    const loaded = await loadState();
+    if (!loaded) {
+        console.log("No saved binary state found. Loading defaults...");
+        wasmInstance.exports.init_default_layout();
+        saveState();
+    }
+}
+
 start();

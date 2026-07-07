@@ -82,6 +82,9 @@ Entity ecs_create_entity() {
   return e;
 }
 
+#define WASM_IMPORT(name) __attribute__((import_module("env"), import_name(name)))
+WASM_IMPORT("js_on_entity_deleted") void js_on_entity_deleted(int entity);
+
 void ecs_delete_entity(Entity entity) {
   if (entity >= entity_count) return;
 
@@ -90,6 +93,7 @@ void ecs_delete_entity(Entity entity) {
     if (ecs_has_component(i, COMP_CONNECTION)) {
       ConnectionComponent *conn = &connection_components[i];
       if (conn->from_entity == (int)entity || conn->to_entity == (int)entity) {
+        js_on_entity_deleted((int)i);
         // Shift components to delete the connection entity i
         for (unsigned int k = i; k < entity_count - 1; k++) {
           entity_masks[k] = entity_masks[k + 1];
@@ -123,6 +127,7 @@ void ecs_delete_entity(Entity entity) {
     }
   }
 
+  js_on_entity_deleted((int)entity);
   // 3. Move/Shift entities starting from deleted one
   for (unsigned int k = entity; k < entity_count - 1; k++) {
     entity_masks[k] = entity_masks[k + 1];
