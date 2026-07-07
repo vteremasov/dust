@@ -357,10 +357,24 @@ static void draw_widget_text_content(Entity e, float tx_offset_y, float char_w, 
               
               int is_keyword = 0;
               const char *keywords[] = {
-                "int", "void", "function", "const", "char", "float", "double", "short", "long", 
-                "unsigned", "signed", "struct", "class", "typedef", "union", "enum", "return", 
-                "if", "else", "for", "while", "do", "switch", "case", "break", "continue", 
-                "default", "goto", "static", "extern", "inline", "bool", "true", "false", "let", "var"
+                // Common / C
+                "int", "void", "char", "float", "double", "short", "long", "unsigned", "signed", 
+                "struct", "class", "typedef", "union", "enum", "return", "if", "else", "for", 
+                "while", "do", "switch", "case", "break", "continue", "default", "goto", 
+                "static", "extern", "inline", "bool", "true", "false", 
+                
+                // JavaScript
+                "let", "var", "const", "function", "extends", "import", "export", "from", 
+                "as", "async", "await", "yield", "try", "catch", "finally", "throw", "new", 
+                "this", "typeof", "instanceof", "in", "of", "null", "undefined",
+                
+                // Python
+                "def", "elif", "lambda", "pass", "global", "nonlocal", "assert", "except", 
+                "raise", "with", "and", "or", "not", "is", "None", "del",
+                
+                // Golang
+                "func", "package", "type", "interface", "map", "chan", "go", "select", 
+                "defer", "range", "fallthrough", "nil"
               };
               for (int kw = 0; kw < sizeof(keywords)/sizeof(keywords[0]); kw++) {
                 int match = 1;
@@ -437,7 +451,7 @@ static void draw_entity(Entity e, int is_editing, int default_texture_id) {
     if (r->border_a > 0.001f) {
       draw_rect_border(t->x, t->y, t->w, t->h, 2.0f, r->border_r, r->border_g, r->border_b, r->border_a);
     }
-  } else if (r->type == WIDGET_RECT || r->type == WIDGET_CODE) {
+  } else if (r->type == WIDGET_RECT || r->type == WIDGET_CODE || r->type == WIDGET_TEXT) {
     if (r->bg_a > 0.001f) {
       draw_rect(t->x, t->y, t->w, t->h, r->bg_r, r->bg_g, r->bg_b, r->bg_a);
     }

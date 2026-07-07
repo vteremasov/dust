@@ -744,25 +744,16 @@ __attribute__((visibility("default"))) float get_node_border_a(int idx) {
 __attribute__((visibility("default"))) float get_node_text_r(int idx) {
   if (idx < 0 || idx >= (int)entity_count)
     return 0.0f;
-  if (render_components[idx].type == WIDGET_TEXT) {
-    return render_components[idx].bg_r;
-  }
   return render_components[idx].r;
 }
 __attribute__((visibility("default"))) float get_node_text_g(int idx) {
   if (idx < 0 || idx >= (int)entity_count)
     return 0.0f;
-  if (render_components[idx].type == WIDGET_TEXT) {
-    return render_components[idx].bg_g;
-  }
   return render_components[idx].g;
 }
 __attribute__((visibility("default"))) float get_node_text_b(int idx) {
   if (idx < 0 || idx >= (int)entity_count)
     return 0.0f;
-  if (render_components[idx].type == WIDGET_TEXT) {
-    return render_components[idx].bg_b;
-  }
   return render_components[idx].b;
 }
 
@@ -787,11 +778,6 @@ set_node_text_color(int idx, float r, float g, float b) {
           render_components[i].r = tr;
           render_components[i].g = tg;
           render_components[i].b = tb;
-          if (render_components[i].type == WIDGET_TEXT) {
-            render_components[i].bg_r = tr;
-            render_components[i].bg_g = tg;
-            render_components[i].bg_b = tb;
-          }
           if (render_components[i].type != WIDGET_IMAGE &&
               render_components[i].type != WIDGET_PATH) {
             js_init_node_texture(
@@ -815,11 +801,6 @@ set_node_text_color(int idx, float r, float g, float b) {
       render_components[idx].r = tr;
       render_components[idx].g = tg;
       render_components[idx].b = tb;
-      if (render_components[idx].type == WIDGET_TEXT) {
-        render_components[idx].bg_r = tr;
-        render_components[idx].bg_g = tg;
-        render_components[idx].bg_b = tb;
-      }
       if (render_components[idx].type != WIDGET_IMAGE &&
           render_components[idx].type != WIDGET_PATH) {
         js_init_node_texture(
@@ -1226,6 +1207,11 @@ __attribute__((visibility("default"))) void on_btn_clear_click() {
   selected_node_idx = -1;
   editing_node_idx = -1;
   mark_dirty();
+}
+
+__attribute__((visibility("default"))) void init_default_layout() {
+  on_btn_clear_click();
+  generate_initial_content();
 }
 
 // active_stroke_node_idx is defined in renderer.c

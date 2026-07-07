@@ -50,6 +50,10 @@ const wasmIndexToId = []; // local index -> { clientId: BigInt, seq: Number }
 const deletedEntities = new Map(); // Key: "clientId:seq" -> Timestamp
 const entityTimestamps = new Map(); // Key: "clientId:seq" -> { pos_time: Number, render_time: Number, text_time: Number }
 const previousEntityCache = new Map(); // Key: "clientId:seq" -> cached state object
+let dataChannel = null;
+let peerConnection = null;
+let lastCursorSendTime = 0;
+const remoteCursors = new Map(); // Key: clientId (string) -> { el: HTMLElement, worldX: Number, worldY: Number, lastUpdate: Number }
 
 function rebuildIdCache() {
     idToWasmIndex.clear();
@@ -62,8 +66,14 @@ function rebuildIdCache() {
 }
 
 // Multi-Canvas Tab Management
-let tabList = [{ id: 'default', name: 'Main Canvas' }];
-let activeTabId = 'default';
+let tabList = [];
+let activeTabId = '';
+
+function updateUrlParam() {
+    const url = new URL(window.location);
+    url.searchParams.set('canvas', activeTabId);
+    window.history.replaceState({}, '', url);
+}
 
 function loadTabConfig() {
     const savedTabs = localStorage.getItem("dust_canvas_tabs");
@@ -78,6 +88,30 @@ function loadTabConfig() {
     if (savedActive) {
         activeTabId = savedActive;
     }
+    
+    const urlParams = new URLSearchParams(window.location.search);
+    const urlCanvasId = urlParams.get('canvas');
+    if (urlCanvasId) {
+        activeTabId = urlCanvasId;
+        const exists = tabList.some(t => t.id === urlCanvasId);
+        if (!exists) {
+            tabList.push({ id: urlCanvasId, name: "Shared Canvas" });
+            localStorage.setItem("dust_canvas_tabs", JSON.stringify(tabList));
+        }
+        localStorage.setItem("dust_canvas_active_tab", activeTabId);
+    } else {
+        if (!activeTabId || !tabList.some(t => t.id === activeTabId)) {
+            if (tabList.length > 0) {
+                activeTabId = tabList[0].id;
+            } else {
+                activeTabId = "tab_" + Date.now() + "_" + Math.random().toString(36).substr(2, 9);
+                tabList = [{ id: activeTabId, name: 'Main Canvas' }];
+                localStorage.setItem("dust_canvas_tabs", JSON.stringify(tabList));
+            }
+            localStorage.setItem("dust_canvas_active_tab", activeTabId);
+        }
+    }
+    updateUrlParam();
 }
 loadTabConfig();
 
@@ -1013,9 +1047,21 @@ async function start() {
 
         setupInputHandlers();
         bindPropertiesPanelEvents();
+        setupCollabUI();
+        
+        const addTabBtn = document.getElementById("btn-add-tab");
+        if (addTabBtn) {
+            addTabBtn.addEventListener("click", addNewTab);
+        }
+        renderTabs();
 
         try {
-            await loadState();
+            const loaded = await loadState();
+            if (!loaded) {
+                console.log("No saved binary state found. Loading defaults...");
+                instance.exports.init_default_layout();
+                saveState();
+            }
         } catch (e) {
             console.error("Error loading state from localStorage:", e);
         }
@@ -1038,6 +1084,7 @@ async function start() {
             instance.exports.tick_app(timestamp);
             updatePropertiesPanel();
             updateEditorStyle();
+            updateAllRemoteCursors();
 
             if (isDebugExpanded && now - lastDebugPanelUpdateTime >= 200) {
                 updateDebugStatsPanel();
@@ -1247,6 +1294,26 @@ function setupInputHandlers() {
         }
         const coords = getCanvasCoords(e);
         wasmInstance.exports.on_mouse_move(coords.x, coords.y);
+        
+        // P2P Live Cursor Position Broadcast
+        if (isP2PConnected()) {
+            const now = Date.now();
+            if (now - lastCursorSendTime > 50) { // 20Hz
+                lastCursorSendTime = now;
+                const wCoords = getWorldCoords(e.clientX, e.clientY);
+                const buf = new ArrayBuffer(17);
+                const view = new DataView(buf);
+                view.setUint8(0, 7); // OP_CURSOR
+                view.setBigUint64(1, clientId, true);
+                view.setFloat32(9, wCoords.x, true);
+                view.setFloat32(13, wCoords.y, true);
+                try {
+                    dataChannel.send(buf);
+                } catch (err) {
+                    console.error("Cursor send failed:", err);
+                }
+            }
+        }
     });
 
     window.addEventListener('mouseup', (e) => {
@@ -1783,11 +1850,10 @@ function serializeStateToBuffer() {
     view.setFloat32(offset, wasmInstance.exports.get_camera_zoom(), true); offset += 4;
     
     // Image URLs block
-    const validUrls = uploadedImageDataUrls.filter(url => url !== null);
-    view.setUint32(offset, validUrls.length, true);
+    view.setUint32(offset, uploadedImageDataUrls.length, true);
     offset += 4;
-    for (let i = 0; i < validUrls.length; i++) {
-        const url = validUrls[i] || "";
+    for (let i = 0; i < uploadedImageDataUrls.length; i++) {
+        const url = uploadedImageDataUrls[i] || "";
         const encodedUrl = encoder.encode(url);
         view.setUint32(offset, encodedUrl.length, true);
         offset += 4;
@@ -1922,8 +1988,9 @@ async function deserializeStateFromBuffer(buffer) {
     const imgCount = view.getUint32(offset, true);
     offset += 4;
     
-    const loadedImageDataUrls = [];
-    const newTextures = [];
+    const fontAtlasTex = textures[0];
+    const loadedImageDataUrls = [null];
+    const newTextures = [fontAtlasTex];
     
     for (let i = 0; i < imgCount; i++) {
         const strLen = view.getUint32(offset, true);
@@ -1931,6 +1998,11 @@ async function deserializeStateFromBuffer(buffer) {
         const strBytes = new Uint8Array(buffer, offset, strLen);
         offset += strLen;
         const dataUrl = decoder.decode(strBytes);
+        
+        if (i === 0 && !dataUrl.startsWith("data:")) {
+            // New format's font atlas placeholder, skip parsing since index 0 is preloaded
+            continue;
+        }
         
         if (dataUrl) {
             loadedImageDataUrls.push(dataUrl);
@@ -2139,19 +2211,16 @@ async function loadState() {
             return false;
         }
     }
-    
-    // Migrate legacy JSON format if present (only applicable for 'default' tab)
-    if (activeTabId === 'default') {
-        const legacy = localStorage.getItem("dust_canvas_state");
-        if (legacy) {
-            console.log("Migrating legacy JSON board to binary format...");
-            const success = await loadStateLegacyJson();
-            if (success) {
-                saveState();
-                localStorage.removeItem("dust_canvas_state");
-            }
-            return success;
+    // Migrate legacy JSON format if present
+    const legacy = localStorage.getItem("dust_canvas_state");
+    if (legacy) {
+        console.log("Migrating legacy JSON board to binary format...");
+        const success = await loadStateLegacyJson();
+        if (success) {
+            saveState();
+            localStorage.removeItem("dust_canvas_state");
         }
+        return success;
     }
     return false;
 }
@@ -2520,6 +2589,18 @@ function handleIncomingP2PMessage(buffer) {
     
     const opcode = view.getUint8(offset++);
     
+    if (opcode === 7) {
+        // OP_CURSOR (0x07)
+        const remoteClientId = view.getBigUint64(offset, true); offset += 8;
+        const wx = view.getFloat32(offset, true); offset += 4;
+        const wy = view.getFloat32(offset, true); offset += 4;
+        
+        if (remoteClientId !== clientId) {
+            handleRemoteCursorUpdate(remoteClientId, wx, wy);
+        }
+        return;
+    }
+    
     if (opcode === 5) {
         // OP_SYNC_REQ (Send full state)
         if (isP2PConnected()) {
@@ -2752,20 +2833,23 @@ const webrtcConfig = {
 function initWebRTC(isHost) {
     disconnectP2P(); // Make sure to clean up any previous connection
     
+    // Set gathering placeholder
+    if (isHost) {
+        document.getElementById('host-offer-text').value = "Generating invitation code... Please wait...";
+    } else {
+        document.getElementById('join-answer-text').value = "Generating response code... Please wait...";
+    }
+    
     peerConnection = new RTCPeerConnection(webrtcConfig);
+    
+    let gatheringTimeout = setTimeout(() => {
+        writeLocalDescriptionToUI(isHost);
+    }, 1500);
     
     peerConnection.onicecandidate = (event) => {
         if (!event.candidate) {
-            // ICE gathering complete, encode details into offer/answer fields
-            const desc = peerConnection.localDescription;
-            const fullPayload = JSON.stringify(desc);
-            const base64Handshake = btoa(fullPayload);
-            
-            if (isHost) {
-                document.getElementById('host-offer-text').value = base64Handshake;
-            } else {
-                document.getElementById('join-answer-text').value = base64Handshake;
-            }
+            clearTimeout(gatheringTimeout);
+            writeLocalDescriptionToUI(isHost);
         }
     };
     
@@ -2784,6 +2868,20 @@ function initWebRTC(isHost) {
     }
 }
 
+function writeLocalDescriptionToUI(isHost) {
+    if (!peerConnection) return;
+    const desc = peerConnection.localDescription;
+    if (!desc) return;
+    const fullPayload = JSON.stringify(desc);
+    const base64Handshake = btoa(fullPayload);
+    
+    if (isHost) {
+        document.getElementById('host-offer-text').value = base64Handshake;
+    } else {
+        document.getElementById('join-answer-text').value = base64Handshake;
+    }
+}
+
 function disconnectP2P() {
     if (dataChannel) {
         try { dataChannel.close(); } catch (e) {}
@@ -2794,6 +2892,7 @@ function disconnectP2P() {
         peerConnection = null;
     }
     updateCollabStatusUI();
+    clearRemoteCursors();
     
     // Clear token inputs
     const hostOffer = document.getElementById('host-offer-text');
@@ -2804,6 +2903,71 @@ function disconnectP2P() {
     if (hostAnswer) hostAnswer.value = "";
     if (joinOffer) joinOffer.value = "";
     if (joinAnswer) joinAnswer.value = "";
+}
+
+function handleRemoteCursorUpdate(remoteCId, wx, wy) {
+    const key = remoteCId.toString();
+    const now = Date.now();
+    let cursor = remoteCursors.get(key);
+    
+    if (!cursor) {
+        const container = document.getElementById("cursors-container");
+        if (!container) return;
+        
+        const el = document.createElement("div");
+        el.style.position = "absolute";
+        el.style.left = "0px";
+        el.style.top = "0px";
+        el.style.display = "flex";
+        el.style.flexDirection = "column";
+        el.style.alignItems = "flex-start";
+        el.style.pointerEvents = "none";
+        el.style.zIndex = "5";
+        
+        const hue = Number(remoteCId % 360n);
+        const color = `hsl(${hue}, 85%, 55%)`;
+        
+        el.innerHTML = `
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="${color}" stroke="white" stroke-width="2" style="filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));">
+                <path d="M4.5 3v15.2l4.8-4.7 6.2 6 2.5-2.5-6.1-5.9 5.6-.2z"/>
+            </svg>
+            <span style="background: rgba(15, 23, 42, 0.85); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); color: white; font-size: 0.65rem; padding: 2px 6px; border-radius: 4px; font-weight: 600; margin-top: 2px; border: 1px solid rgba(255,255,255,0.12); white-space: nowrap; box-shadow: 0 4px 10px rgba(0,0,0,0.25);">
+                Guest_${key.substring(0, 4)}
+            </span>
+        `;
+        container.appendChild(el);
+        cursor = { el, worldX: wx, worldY: wy, lastUpdate: now };
+        remoteCursors.set(key, cursor);
+    } else {
+        cursor.worldX = wx;
+        cursor.worldY = wy;
+        cursor.lastUpdate = now;
+    }
+    
+    const screenX = wx * currentZoom + currentPanX;
+    const screenY = wy * currentZoom + currentPanY;
+    cursor.el.style.transform = `translate3d(${screenX}px, ${screenY}px, 0)`;
+}
+
+function updateAllRemoteCursors() {
+    const now = Date.now();
+    for (const [key, cursor] of remoteCursors.entries()) {
+        if (now - cursor.lastUpdate > 5000) {
+            cursor.el.remove();
+            remoteCursors.delete(key);
+        } else {
+            const screenX = cursor.worldX * currentZoom + currentPanX;
+            const screenY = cursor.worldY * currentZoom + currentPanY;
+            cursor.el.style.transform = `translate3d(${screenX}px, ${screenY}px, 0)`;
+        }
+    }
+}
+
+function clearRemoteCursors() {
+    for (const cursor of remoteCursors.values()) {
+        cursor.el.remove();
+    }
+    remoteCursors.clear();
 }
 
 let partialBuffer = null;
@@ -2919,6 +3083,7 @@ async function switchTab(tabId) {
     disconnectP2P();
     activeTabId = tabId;
     localStorage.setItem("dust_canvas_active_tab", activeTabId);
+    updateUrlParam();
     
     renderTabs();
     
@@ -3060,28 +3225,6 @@ function setupCollabUI() {
         text.select();
         navigator.clipboard.writeText(text.value);
     });
-}
-
-// Initialize startup
-async function start() {
-    const success = await initWgpuCanvas();
-    if (!success) return;
-    
-    setupInputHandlers();
-    setupCollabUI();
-    
-    const addTabBtn = document.getElementById("btn-add-tab");
-    if (addTabBtn) {
-        addTabBtn.addEventListener("click", addNewTab);
-    }
-    renderTabs();
-    
-    const loaded = await loadState();
-    if (!loaded) {
-        console.log("No saved binary state found. Loading defaults...");
-        wasmInstance.exports.init_default_layout();
-        saveState();
-    }
 }
 
 start();
